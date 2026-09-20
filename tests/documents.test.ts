@@ -1,3 +1,4 @@
+import {contentFixture} from './fixtures';
 import { randomUUID } from 'node:crypto';
 import { mkdtemp, readFile, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -36,22 +37,10 @@ class MemoryStorage implements StorageAdapter {
 }
 
 async function fixtureDocx(): Promise<Buffer> {
-  return renderContract({
-    title: '软件开发服务合同',
-    parties: [
-      { role: '甲方', name: '', details: '统一社会信用代码：[待补充]' },
-      { role: '乙方', name: '星河科技有限公司', details: '' },
-    ],
-    sections: [
-      { title: '项目内容', content: '乙方按照甲方确认的需求开发软件。' },
-      { title: '服务费用', content: '' },
-    ],
-    signing: '本合同自双方签字盖章之日起生效。',
-    missing: ['甲方名称', '交付日期'],
-  });
+  return renderContract(contentFixture());
 }
 
-test('renderContract creates a real Chinese DOCX with structure and explicit missing markers', async () => {
+test('renderContract creates a real Chinese DOCX with clean body, attachment and one signature section', async () => {
   const bytes = await fixtureDocx();
   assert.ok(bytes.length > 1000);
   const packageInfo = validateDocxBuffer(bytes);
@@ -62,11 +51,13 @@ test('renderContract creates a real Chinese DOCX with structure and explicit mis
   const headerXml = Buffer.from(packageFiles['word/header1.xml']).toString('utf8');
   const footerXml = Buffer.from(packageFiles['word/footer1.xml']).toString('utf8');
   const numberingXml = Buffer.from(packageFiles['word/numbering.xml']).toString('utf8');
-  assert.match(documentXml, /软件开发服务合同/);
-  assert.match(documentXml, /待补充/);
+  assert.match(documentXml, /软件开发合同/);
+  assert.doesNotMatch(documentXml, /待补充|起草参考|github\.com/);
+  assert.equal((documentXml.match(/签署页/g)||[]).length,1);
+  assert.match(documentXml,/功能与交付清单/);
   assert.match(documentXml, /w:headerReference/);
   assert.match(documentXml, /w:footerReference/);
-  assert.match(headerXml, /合同工作室/);
+  assert.doesNotMatch(headerXml, /合同工作室/);
   assert.match(footerXml, /PAGE/);
   assert.match(numberingXml, /第%1条/);
   assert.match(documentXml, /签署页/);
@@ -91,8 +82,8 @@ test('DOCX validation bounds entries, paths, and decompression before fflate inf
 test('DOCX text extraction preserves paragraphs and tables without external entities', async () => {
   const bytes = await fixtureDocx();
   const text = extractDocxText(bytes);
-  assert.match(text, /软件开发服务合同/);
-  assert.match(text, /项目内容/);
+  assert.match(text, /软件开发合同/);
+  assert.match(text, /开发范围/);
   assert.match(text, /乙方/);
   assert.match(text, /签署页/);
   assert.ok(text.includes('\n'));

@@ -1,3 +1,4 @@
+import {exportProblems} from '../lib/contract-library/playbooks';
 import {
   AlignmentType,
   Document,
@@ -342,7 +343,7 @@ function signingRows(parties: ContractContent['parties']): TableRow[] {
   return rows.map((party) => new TableRow({
     children: [
       new TableCell({ children: [new Paragraph({ children: [textRun(missingValue(party.role), { bold: true })] })] }),
-      new TableCell({ children: [new Paragraph({ children: [textRun(`名称：${missingValue(party.name)}`)] }), new Paragraph({ children: [textRun('盖章：________________') ] })] }),
+      new TableCell({ children: [new Paragraph({ children: [textRun(`名称：${missingValue(party.name)}`)] }), new Paragraph({ children: [textRun('签字 / 盖章：________________') ] })] }),
       new TableCell({ children: [new Paragraph({ children: [textRun('签署日期：____年__月__日')] })] }),
     ],
   }));
@@ -353,7 +354,8 @@ function signingRows(parties: ContractContent['parties']): TableRow[] {
  * intentionally conservative: readable Chinese typography, explicit missing
  * markers, real section numbering, a signing page, and Word page fields.
  */
-export async function renderContract(content: ContractContent): Promise<Buffer> {
+export async function renderContract(content: ContractContent, options:{template?:boolean}={}): Promise<Buffer> {
+  if(!options.template){const problems=exportProblems(content);if(problems.length)throw new Error('EXPORT_NOT_READY: '+problems.join('；'));}
   const title = missingValue(content?.title);
   const parties = Array.isArray(content?.parties) ? content.parties : [];
   const sections = Array.isArray(content?.sections) ? content.sections : [];
@@ -363,7 +365,7 @@ export async function renderContract(content: ContractContent): Promise<Buffer> 
     children: [new Paragraph({
       alignment: AlignmentType.CENTER,
       spacing: { after: 80 },
-      children: [textRun(`合同工作室 · ${title}`, { size: 18, font: '宋体' })],
+      children: [textRun(title, { size: 18, font: '宋体' })],
     })],
   });
   const footer = new Footer({
@@ -384,24 +386,7 @@ export async function renderContract(content: ContractContent): Promise<Buffer> 
       spacing: { after: 320 },
       children: [textRun(title, { bold: true, size: 34, font: '黑体' })],
     }),
-    new Paragraph({
-      heading: HeadingLevel.HEADING_1,
-      spacing: { before: 180, after: 140 },
-      children: [textRun('合同主体', { bold: true, size: 26, font: '黑体' })],
-    }),
-    new Table({
-      width: { size: 100, type: WidthType.PERCENTAGE },
-      rows: [
-        new TableRow({
-          children: [
-            new TableCell({ children: [new Paragraph({ children: [textRun('主体', { bold: true })] })] }),
-            new TableCell({ children: [new Paragraph({ children: [textRun('名称', { bold: true })] })] }),
-            new TableCell({ children: [new Paragraph({ children: [textRun('信息', { bold: true })] })] }),
-          ],
-        }),
-        ...contractPartyRows(parties),
-      ],
-    }),
+    ...parties.flatMap(p=>[new Paragraph({children:[textRun(`${p.role}：${missingValue(p.name)}`,{bold:true})],spacing:{after:120}}),...(p.details?.trim()?paragraphLines(p.details):[])]),
   ];
 
   sections.forEach((section) => {
@@ -414,30 +399,14 @@ export async function renderContract(content: ContractContent): Promise<Buffer> 
     children.push(...paragraphLines(section?.content));
   });
 
-  if(content.drafting){
-    children.push(...paragraphLines(`起草参考：${content.drafting.templateName} / ${content.drafting.templateVersion}。本模板与自动检查均待律师审定。以下为来源说明，不属于双方交易条款。`));
-    for(const source of content.drafting.sources) children.push(...paragraphLines(`${source.name}；${source.license}；${source.url}。${source.use}`));
-  }
-  if (missing.length > 0) {
-    children.push(new Paragraph({
-      heading: HeadingLevel.HEADING_1,
-      spacing: { before: 280, after: 140 },
-      children: [textRun('待补充事项', { bold: true, size: 26, font: '黑体' })],
-    }));
-    missing.forEach((item) => children.push(new Paragraph({
-      bullet: { level: 0 },
-      spacing: { after: 120, line: 320 },
-      children: [textRun(missingValue(item))],
-    })));
-  }
-
+  for(const attachment of content.attachments||[]){children.push(new Paragraph({pageBreakBefore:true,keepNext:true,children:[textRun('附件：'+attachment.title,{bold:true,size:26})]}));children.push(...paragraphLines(attachment.content));}
   children.push(new Paragraph({
     pageBreakBefore: true,
     heading: HeadingLevel.HEADING_1,
     spacing: { after: 220 },
     children: [textRun('签署页', { bold: true, size: 28, font: '黑体' })],
   }));
-  children.push(...paragraphLines(content?.signing, { spacingAfter: 180 }));
+
   children.push(new Table({
     width: { size: 100, type: WidthType.PERCENTAGE },
     rows: signingRows(parties),
@@ -445,9 +414,9 @@ export async function renderContract(content: ContractContent): Promise<Buffer> 
 
   const document = new Document({
     title,
-    subject: '中文合同草稿',
-    creator: '合同工作室',
-    description: '由合同工作室生成的合同草稿，签署前请确认待补充事项。',
+    subject: '合同',
+    creator: '',
+    description: '',
     features: { updateFields: true },
     numbering: {
       config: [{

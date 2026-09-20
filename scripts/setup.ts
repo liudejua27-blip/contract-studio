@@ -37,6 +37,8 @@ CREATE TABLE IF NOT EXISTS contracts (
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 );
+ALTER TABLE contracts ADD COLUMN IF NOT EXISTS workflow jsonb;
+ALTER TABLE contracts ADD COLUMN IF NOT EXISTS workflow_revision integer NOT NULL DEFAULT 0;
 CREATE INDEX IF NOT EXISTS contracts_owner_updated_idx ON contracts(owner_id, updated_at DESC);
 
 CREATE TABLE IF NOT EXISTS messages (
@@ -60,12 +62,14 @@ CREATE TABLE IF NOT EXISTS versions (
   content jsonb,
   source text NOT NULL CHECK (source IN ('ai', 'demo', 'lawyer')),
   sha256 text,
+  text_content text,
   created_at timestamptz NOT NULL DEFAULT now(),
   UNIQUE (contract_id, number)
 );
 ALTER TABLE versions ADD COLUMN IF NOT EXISTS review_id text;
 CREATE INDEX IF NOT EXISTS versions_contract_created_idx ON versions(contract_id, created_at, number);
 
+ALTER TABLE versions ADD COLUMN IF NOT EXISTS text_content text;
 CREATE TABLE IF NOT EXISTS reviews (
   id text PRIMARY KEY,
   contract_id text NOT NULL REFERENCES contracts(id) ON DELETE CASCADE,

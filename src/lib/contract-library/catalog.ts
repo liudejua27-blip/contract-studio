@@ -1,6 +1,7 @@
+import {PLAYBOOKS,PLAYBOOK_VERSION} from './playbooks';
 /** Original Chinese drafting playbooks. Structure informed by attributed sources;
  * no foreign governing law, commercial defaults or enforceability conclusions imported. */
-export const LIBRARY_VERSION = '2026.09.20.2';
+export const LIBRARY_VERSION = PLAYBOOK_VERSION;
 export const SOURCES = {
  civil: {name:'中华人民共和国民法典（市场监管总局）',url:'https://www.samr.gov.cn/zw/zfxxgk/fdzdgknr/bgt/art/2023/art_60fb3863b7364b759123a42d1df568ca.html',license:'法律原文；本库独立整理',version:'2020年通过，2021年施行；2026-09-20查阅',use:'国内合同内容与分类参考，不代表穷尽现行法律'},
  official: {name:'国家市场监督管理总局合同示范文本库',url:'https://htsfwb.samr.gov.cn/',license:'官方公开查阅、下载、使用；本库仅链接',version:'2026-09-20查阅',use:'供律师进一步选择地区、行业示范文本；未批量导入'},
@@ -40,7 +41,7 @@ const commonRisks=risks([
  ['liability','责任分配与免责','结合用户立场审查责任范围、免责及违约金，不将固定比例当作法律标准。','免责','不承担任何责任','无限责任','全部损失'],
  ['attachments','附件完整性','核对引用的附件是否实际提供、编号及版本是否一致。当前系统未自动核验独立附件。','附件','另行约定'],
 ]);
-function make(id:string,name:string,category:string,description:string,aliases:string[],legalBasis:string,sourceIds:SourceId[],f:Field[],c:Clause[],r:Risk[],paid=true):ContractTemplate{return {id,name,category,description,aliases,legalBasis,version:LIBRARY_VERSION,jurisdiction:'中国大陆一般民商事交易；特殊行业、跨境及地方规定须另审',status:'pending_lawyer_review',sourceIds:[...new Set<SourceId>(['civil','skill',...sourceIds])],fields:[...commonFields,...(paid?commercial:[]),...f],clauses:[...commonClauses.slice(0,2),...c,...(paid?feeClause:[]),...commonClauses.slice(2)],risks:[...commonRisks,...r]};}
+function make(id:string,name:string,category:string,description:string,aliases:string[],legalBasis:string,sourceIds:SourceId[],f:Field[],c:Clause[],r:Risk[],paid=true):ContractTemplate{return {id,name,category,description,aliases,legalBasis,version:LIBRARY_VERSION,jurisdiction:'中国大陆一般民商事交易；特殊行业、跨境及地方规定须另审',status:'pending_lawyer_review',sourceIds:[...new Set<SourceId>(['civil','skill',...sourceIds])],fields:PLAYBOOKS[id]?.fields||[...commonFields,...(paid?commercial:[]),...f],clauses:[...commonClauses.slice(0,2),...c,...(paid?feeClause:[]),...commonClauses.slice(2)],risks:[...commonRisks,...r]};}
 export const CONTRACT_TEMPLATES:ContractTemplate[]=[
  make('software','软件开发合同','技术与数字服务','网站、小程序、应用及定制软件开发。',['软件开发','小程序开发','APP开发','网站开发'],'民法典合同编通则；涉及技术合同参照第845条；具体定性由律师判断',['services'],fields([
  ['scope','功能与范围','功能清单、运行环境、接口、明确不包含的工作有哪些？'],['deliverables','源码与交付物','是否交付源码、部署文件、文档和账号？'],['acceptance','验收标准','测试用例、验收流程、缺陷等级与整改复验如何约定？'],['ip','成果权利','定制成果、既有代码及开源组件的权利分别如何处理？'],['maintenance','维护安排','缺陷修复、质保及后续维护的范围和期限是什么？']]),clauses([

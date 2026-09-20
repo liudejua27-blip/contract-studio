@@ -1,3 +1,4 @@
+import {startWorkflow,controlWorkflow,type WorkflowStore} from './workflow';
 import {getTemplate} from '../lib/contract-library/catalog';
 import {annotateMessage} from '../lib/contract-library/engine';
 import { createHash, randomUUID } from 'node:crypto';
@@ -23,6 +24,8 @@ import { createEditorConfig, verifyOnlyOfficeToken, type OnlyOfficeEditorConfigR
 const DOCX_CONTENT_TYPE = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 
 type ContractRow = {
+  workflow?:Contract["workflow"];
+  workflow_revision?:number;
   id: string;
   owner_id: string;
   owner_name: string;
@@ -40,6 +43,7 @@ type MessageRow = {
 };
 
 type VersionRow = {
+  text_content?:string;
   id: string;
   number: number;
   kind: 'draft' | 'review';
@@ -143,6 +147,7 @@ function mapVersion(row: VersionRow): Version {
   return {
     id: row.id,
     number: row.number,
+    text:row.text_content,
     kind: row.kind,
     fileKey: row.file_key,
     content: parseContent(row.content),
@@ -173,6 +178,7 @@ function mapReview(row: ReviewRow, messages: ReviewMessage[]): Review {
 
 function mapContract(row: ContractRow, messages: Message[], versions: Version[], reviews: Review[]): Contract {
   return {
+    workflow:row.workflow,
     id: row.id,
     ownerId: row.owner_id,
     ownerName: row.owner_name,
@@ -196,7 +202,7 @@ async function hydrateContract(row: ContractRow, actor?: AuthContext['user']): P
       ),
     lawyerScope
       ? query<VersionRow>(
-        `SELECT v.id, v.number, v.kind, v.review_id, v.file_key, v.content, v.created_at, v.source, v.sha256
+        `SELECT v.id, v.number, v.kind, v.review_id, v.file_key, v.content, v.created_at, v.source, v.sha256, v.text_content
          FROM versions v
          WHERE v.contract_id = $1
            AND EXISTS (
@@ -215,7 +221,7 @@ async function hydrateContract(row: ContractRow, actor?: AuthContext['user']): P
         [row.id, actor!.id],
       )
       : query<VersionRow>(
-        `SELECT v.id, v.number, v.kind, v.review_id, v.file_key, v.content, v.created_at, v.source, v.sha256
+        `SELECT v.id, v.number, v.kind, v.review_id, v.file_key, v.content, v.created_at, v.source, v.sha256, v.text_content
          FROM versions v WHERE v.contract_id = $1 ORDER BY v.number ASC`,
         [row.id],
       ),
@@ -254,7 +260,7 @@ async function hydrateContract(row: ContractRow, actor?: AuthContext['user']): P
   }));
   const messageMap = new Map(reviewMessages);
   return mapContract(
-    row,
+    actor?.role==='lawyer'?{...row,workflow:undefined}:row,
     messageRows.rows.map(mapMessage),
     versionRows.rows.map(mapVersion),
     reviewRows.rows.map((review) => mapReview(review, messageMap.get(review.id) ?? [])),
@@ -263,7 +269,7 @@ async function hydrateContract(row: ContractRow, actor?: AuthContext['user']): P
 
 async function findAccessibleRow(contractId: string, actor: AuthContext['user']): Promise<ContractRow | null> {
   const result = await query<ContractRow>(
-    `SELECT c.id, c.owner_id, u.name AS owner_name, c.title, c.created_at, c.updated_at
+    `SELECT c.id, c.owner_id, u.name AS owner_name, c.title, c.created_at, c.updated_at, c.workflow, c.workflow_revision
      FROM contracts c JOIN users u ON u.id = c.owner_id
      WHERE c.id = $1
        AND ($2 = 'admin' OR c.owner_id = $3
@@ -286,7 +292,7 @@ export async function getContractForRoute(actor: AuthContext['user'], contractId
 
 export async function listContracts(actor: AuthContext['user']): Promise<Contract[]> {
   const result = await query<ContractRow>(
-    `SELECT c.id, c.owner_id, u.name AS owner_name, c.title, c.created_at, c.updated_at
+    `SELECT c.id, c.owner_id, u.name AS owner_name, c.title, c.created_at, c.updated_at, c.workflow, c.workflow_revision
      FROM contracts c JOIN users u ON u.id = c.owner_id
      WHERE $1 = 'admin' OR c.owner_id = $2
         OR EXISTS (SELECT 1 FROM reviews r WHERE r.contract_id = c.id AND r.lawyer_id = $2)
@@ -325,74 +331,20 @@ async function renderAndStore(content: ContractContent, fileKey: string): Promis
   return createHash('sha256').update(bytes).digest('hex');
 }
 
-export async function chatContract(actor: AuthContext['user'], contractId: string, input: unknown): Promise<Contract> {
-  const parsed = chatInput.parse(input);
-  const current = await requireAccessible(contractId, actor);
-  if (actor.role !== 'client' || current.ownerId !== actor.id) {
-    throw new AppError(403, 'Only the contract owner can use contract drafting chat.', 'FORBIDDEN');
-  }
-  if (await openReviewExists(contractId)) {
-    throw new AppError(
-      409,
-      'This contract is under review. The submitted version is frozen; continue in the review conversation instead.',
-      'REVIEW_VERSION_FROZEN',
-    );
-  }
-  let existingDocumentText: string | undefined;
-  const latestVersion = current.versions[current.versions.length - 1];
-  if (latestVersion) {
-    const existingBytes = await storage.get(latestVersion.fileKey);
-    if (!existingBytes) throw new AppError(409, 'The current contract document is unavailable.', 'VERSION_FILE_NOT_READY');
-    try {
-      existingDocumentText = extractDocxText(Buffer.isBuffer(existingBytes) ? existingBytes : Buffer.from(existingBytes));
-    } catch {
-      throw new AppError(422, 'The current DOCX could not be read safely for rewriting.', 'DOCX_TEXT_EXTRACTION_FAILED');
-    }
-  }
-  const generated = await generateContractReply({
-    mode: parsed.mode as AiMode,
-    generate: parsed.generate,
-    prompt: parsed.message,
-    templateId: parsed.templateId,
-    title: current.title,
-    messages: current.messages,
-    existingDocumentText,
-  });
-  const userMessageId = randomUUID();
-  const assistantMessageId = randomUUID();
-  let versionId: string | null = null;
-  let fileKey: string | null = null;
-  let sha256: string | null = null;
-  if (generated.content) {
-    versionId = randomUUID();
-    fileKey = `contracts/${contractId}/versions/${versionId}.docx`;
-    sha256 = await renderAndStore(generated.content, fileKey);
-  }
-  await withTransaction(async (client) => {
-    // Locking the contract serializes concurrent chat/review submissions. We still
-    // perform the provider call outside the transaction so a slow model holds no DB lock.
-    await client.query('SELECT id FROM contracts WHERE id = $1 FOR UPDATE', [contractId]);
-    if (await openReviewExists(contractId, client)) {
-      throw new AppError(409, 'The submitted review version is frozen.', 'REVIEW_VERSION_FROZEN');
-    }
-    await client.query(
-      'INSERT INTO messages (id, contract_id, role, content) VALUES ($1, $2, $3, $4), ($5, $2, $6, $7)',
-      [userMessageId, contractId, 'user', annotateMessage(parsed.message,parsed.templateId), assistantMessageId, 'assistant', generated.reply],
-    );
-    if (versionId && fileKey && generated.content && sha256) {
-      const max = await client.query<{ max: number | null }>('SELECT MAX(number) AS max FROM versions WHERE contract_id = $1', [contractId]);
-      const number = Number(max.rows[0]?.max ?? 0) + 1;
-      await client.query(
-        `INSERT INTO versions (id, contract_id, number, kind, file_key, content, source, sha256)
-         VALUES ($1, $2, $3, 'draft', $4, $5::jsonb, $6, $7)`,
-        [versionId, contractId, number, fileKey, JSON.stringify(generated.content), generated.source, sha256],
-      );
-      await client.query('UPDATE contracts SET title = $1 WHERE id = $2', [generated.content.title, contractId]);
-    }
-    await client.query('UPDATE contracts SET updated_at = now() WHERE id = $1', [contractId]);
-  });
-  return requireAccessible(contractId, actor);
-}
+function workflowStore(actor:User,contractId:string):WorkflowStore{return{
+ load:async()=>{const row=await findAccessibleRow(contractId,actor);if(!row)throw new AppError(404,'合同不存在。','CONTRACT_NOT_FOUND');return{contract:await hydrateContract(row,actor),revision:row.workflow_revision||0}},
+ save:async(c,revision)=>{await withTransaction(async client=>{
+ const changed=await client.query('UPDATE contracts SET workflow=$1::jsonb,workflow_revision=workflow_revision+1,title=$2,updated_at=now() WHERE id=$3 AND workflow_revision=$4 AND EXISTS(SELECT 1 FROM users WHERE id=$5 AND disabled=false AND role=$6)',[JSON.stringify(c.workflow),c.title,contractId,revision,actor.id,actor.role]);
+ if(changed.rowCount!==1)throw new AppError(409,'合同状态已变化，请刷新。','CONFLICT');
+ if(await openReviewExists(contractId,client))throw new AppError(409,'合同正在审核。','REVIEW_VERSION_FROZEN');
+ for(const m of c.messages)await client.query('INSERT INTO messages(id,contract_id,role,content,created_at) VALUES($1,$2,$3,$4,$5) ON CONFLICT(id) DO NOTHING',[m.id,c.id,m.role,m.content,m.createdAt]);
+ for(const v of c.versions)await client.query('INSERT INTO versions(id,contract_id,number,kind,file_key,content,source,sha256,created_at) VALUES($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9) ON CONFLICT(id) DO NOTHING',[v.id,c.id,v.number,v.kind,v.fileKey,JSON.stringify(v.content),v.source,v.sha256,v.createdAt]);
+ });return requireAccessible(contractId,actor)},
+ put:async(key,content)=>renderAndStore(content,key),
+ limit:async()=>{},
+};}
+export async function chatContract(actor:User,contractId:string,input:unknown):Promise<Contract>{return startWorkflow(workflowStore(actor,contractId),actor,input);}
+export async function jobAction(actor:User,contractId:string,jobId:string,action:'run'|'retry'|'cancel'){return controlWorkflow(workflowStore(actor,contractId),actor,jobId,action);}
 
 export async function submitReview(actor: AuthContext['user'], contractId: string, input: unknown): Promise<Contract> {
   const parsed = reviewInput.parse(input);
@@ -405,6 +357,8 @@ export async function submitReview(actor: AuthContext['user'], contractId: strin
     if (actor.role !== 'admin' && contract.rows[0].owner_id !== actor.id) {
       throw new AppError(403, 'Only the contract owner can submit a review.', 'FORBIDDEN');
     }
+    const jobState=await client.query("SELECT workflow->'job'->>'status' AS status FROM contracts WHERE id=$1",[contractId]);
+    if(['pending','running'].includes(jobState.rows[0]?.status))throw new AppError(409,'请等待当前起草完成。','JOB_ACTIVE');
     if (await openReviewExists(contractId, client)) {
       throw new AppError(409, 'An open review already exists for this contract.', 'REVIEW_ALREADY_OPEN');
     }
@@ -553,6 +507,7 @@ export async function uploadReviewVersion(actor: AuthContext['user'], contractId
        VALUES ($1, $2, $3, 'review', $4, $5, NULL, 'lawyer', $6)`,
       [versionId, contractId, number, reviewId, fileKey, sha256],
     );
+    await client.query('UPDATE versions SET text_content=$1 WHERE id=$2',[extractDocxText(file.bytes).slice(0,100000),versionId]);
     await client.query(
       "UPDATE reviews SET editing_version_id = $1, save_status = 'saved' WHERE id = $2",
       [versionId, reviewId],
@@ -635,7 +590,7 @@ export async function getVersionFile(actor: AuthContext['user'], versionId: stri
   sha256: string | null;
 }> {
   const result = await query<VersionRow & { contract_id: string; title: string; owner_id: string }>(
-    `SELECT v.id, v.number, v.kind, v.review_id, v.file_key, v.content, v.created_at, v.source, v.sha256,
+    `SELECT v.id, v.number, v.kind, v.review_id, v.file_key, v.content, v.created_at, v.source, v.sha256, v.text_content,
             c.id AS contract_id, c.title, c.owner_id
      FROM versions v JOIN contracts c ON c.id = v.contract_id
      WHERE v.id = $1 LIMIT 1`,

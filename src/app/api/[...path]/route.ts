@@ -188,6 +188,7 @@ export async function POST(request: Request, context: RouteContext): Promise<Res
       const auth = await requireAuth(request);
       return data(await createContract(auth.user, await body(request)), 201);
     }
+    if(path.length===5&&path[0]==='contracts'&&path[2]==='jobs'&&['run','retry','cancel'].includes(path[4])){const auth=await requireAuth(request);const {jobAction}=await import('@/server/contracts');return data(await jobAction(auth.user,path[1],path[3],path[4] as 'run'|'retry'|'cancel'));}
     if (path.length === 3 && path[0] === 'contracts' && path[2] === 'chat') {
       const auth = await requireAuth(request);
       return data(await chatContract(auth.user, path[1], await body(request)));

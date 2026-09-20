@@ -1,3 +1,4 @@
+import {startWorkflow,controlWorkflow,activeJob,type WorkflowStore} from '../src/server/workflow';
 import {getTemplate} from '../src/lib/contract-library/catalog';
 import {annotateMessage} from '../src/lib/contract-library/engine';
 import {z} from 'zod';
@@ -17,7 +18,7 @@ export function view(c:Stored,u:User):Stored{
  const reviews=c.reviews.filter(r=>r.lawyerId===u.id);
  if(!reviews.length)fail('CONTRACT_NOT_FOUND','合同不存在或无权访问。',404);
  const ids=new Set(reviews.flatMap(r=>[r.submittedVersionId,r.editingVersionId,r.finalVersionId]));
- return {...c,messages:[],reviews,versions:c.versions.filter(v=>ids.has(v.id)||reviews.some(r=>r.id===v.reviewId))};
+ return {...c,workflow:undefined,messages:[],reviews,versions:c.versions.filter(v=>ids.has(v.id)||reviews.some(r=>r.id===v.reviewId))};
 }
 export async function load(env:Env,id:string,u:User){const row=await env.DB.prepare('SELECT * FROM contracts WHERE id=?').bind(id).first<Row>();if(!row)fail('CONTRACT_NOT_FOUND','合同不存在。',404);const contract=JSON.parse(row!.state) as Stored;view(contract,u);return{row:row!,contract};}
 export async function list(env:Env,u:User){
@@ -34,22 +35,19 @@ export async function create(env:Env,u:User,input:unknown){
  const v=z.object({title:z.string().trim().min(1).max(240).default('未命名合同')}).parse(input);const date=stamp();const c:Stored={id:crypto.randomUUID(),ownerId:u.id,ownerName:u.name,title:v.title,createdAt:date,updatedAt:date,messages:[],versions:[],reviews:[]};
  await env.DB.prepare('INSERT INTO contracts(id,owner_id,state,revision,updated_at) VALUES(?,?,?,0,?)').bind(c.id,u.id,JSON.stringify(c),date).run();return c;
 }
-export async function chat(env:Env,u:User,id:string,input:unknown){
- const v=z.object({message:z.string().trim().min(1).max(16000),generate:z.boolean().default(false),mode:z.literal('live').default('live'),templateId:z.string().refine(id=>!!getTemplate(id)).optional()}).parse(input);
- const {row,contract:c}=await load(env,id,u);if(u.role!=='client'||c.ownerId!==u.id)fail('FORBIDDEN','无权起草此合同。',403);
- if(c.reviews.some(r=>r.status!=='completed'))fail('REVIEW_VERSION_FROZEN');
- await limit(env,`ai:${u.id}`,20,3600000);
- let existingDocumentText:string|undefined;const current=c.versions.at(-1);
- if(current){const file=await env.BUCKET.get(current.fileKey);if(!file)fail('FILE_NOT_FOUND','当前版本文件暂时不可用。',503);existingDocumentText=extractDocxText(Buffer.from(await file!.arrayBuffer()));}
- const generated=await generateContractReply({mode:'live',generate:v.generate,prompt:v.message,templateId:v.templateId,title:c.title,messages:c.messages,existingDocumentText,environment:{CONTRACT_AI_API_KEY:env.CONTRACT_AI_API_KEY,CONTRACT_AI_BASE_URL:env.CONTRACT_AI_BASE_URL||'https://api.deepseek.com',CONTRACT_AI_MODEL:env.CONTRACT_AI_MODEL||'deepseek-v4-pro',CONTRACT_AI_TIMEOUT_MS:env.CONTRACT_AI_TIMEOUT_MS||'180000'}});
- c.messages.push({id:crypto.randomUUID(),role:'user',content:annotateMessage(v.message,v.templateId),createdAt:stamp()},{id:crypto.randomUUID(),role:'assistant',content:generated.reply,createdAt:stamp()});
- let fileKey:string|undefined;
- if(generated.content){const bytes=await renderContract(generated.content);const versionId=crypto.randomUUID();fileKey=`contracts/${id}/${versionId}.docx`;await env.BUCKET.put(fileKey,bytes,{httpMetadata:{contentType:DOCX_CONTENT_TYPE}});c.versions.push({id:versionId,number:c.versions.length+1,kind:'draft',fileKey,content:generated.content,createdAt:stamp(),source:'ai',sha256:sha256Hex(bytes)});c.title=generated.content.title;}
- try{return await save(env,row,c,u);}catch(error){if(fileKey)await env.BUCKET.delete(fileKey).catch(()=>{});throw error;}
-}
+export function workflowStore(env:Env,u:User,id:string):WorkflowStore{return{
+ load:async()=>{const {row,contract}=await load(env,id,u);return{contract,revision:row.revision}},
+ save:async(c,revision)=>save(env,{id,owner_id:c.ownerId,state:'',revision:Number(revision),updated_at:c.updatedAt},c,u),
+ put:async(key,content)=>{const bytes=await renderContract(content);await env.BUCKET.put(key,bytes,{httpMetadata:{contentType:DOCX_CONTENT_TYPE}});return sha256Hex(bytes)},
+ limit:()=>limit(env,`ai:${u.id}`,40,3600000),
+ environment:{CONTRACT_AI_API_KEY:env.CONTRACT_AI_API_KEY,CONTRACT_AI_BASE_URL:env.CONTRACT_AI_BASE_URL||'https://api.deepseek.com',CONTRACT_AI_MODEL:env.CONTRACT_AI_MODEL||'deepseek-v4-pro',CONTRACT_AI_TIMEOUT_MS:env.CONTRACT_AI_TIMEOUT_MS}
+};}
+export async function chat(env:Env,u:User,id:string,input:unknown){return startWorkflow(workflowStore(env,u,id),u,input);}
+export async function jobAction(env:Env,u:User,id:string,jobId:string,action:'run'|'retry'|'cancel'){return controlWorkflow(workflowStore(env,u,id),u,jobId,action);}
 export async function submit(env:Env,u:User,id:string,input:unknown){
  const v=z.object({versionId:z.string().uuid(),stance:z.string().trim().min(1).max(100),concerns:z.string().trim().max(3000).default('')}).parse(input);
  const {row,contract:c}=await load(env,id,u);if(c.ownerId!==u.id||u.role!=='client')fail('FORBIDDEN','仅合同所有者可送审。',403);
+ if(activeJob(c))fail('JOB_ACTIVE','请等待当前起草完成。');
  if(c.reviews.some(r=>r.status!=='completed'))fail('REVIEW_ALREADY_OPEN');
  if(!c.versions.some(x=>x.id===v.versionId))fail('VERSION_NOT_FOUND','版本不存在。',404);
  c.reviews.push({id:crypto.randomUUID(),submittedVersionId:v.versionId,lawyerId:null,status:'waiting',stance:v.stance,concerns:v.concerns,requirements:c.messages.map(m=>`${m.role==='user'?'用户':'AI'}：${m.content}`).join('\n'),submittedAt:stamp(),messages:[]});return save(env,row,c,u);
@@ -81,7 +79,7 @@ export async function upload(env:Env,u:User,id:string,reviewId:string,file:File)
  if(!file||!file.name.toLowerCase().endsWith('.docx'))fail('INVALID_FILE_TYPE','请上传 Word DOCX。',400);
  const bytes=Buffer.from(await file.arrayBuffer());try{validateDocxBuffer(bytes,{maxCompressedBytes:10*1024*1024,maxUncompressedBytes:24*1024*1024,maxEntryBytes:12*1024*1024,maxEntries:512});}catch{fail('INVALID_DOCX','文件无效或解压后超过大小限制。',400);}
  const versionId=crypto.randomUUID(),fileKey=`contracts/${id}/${versionId}.docx`;
- await env.BUCKET.put(fileKey,bytes,{httpMetadata:{contentType:DOCX_CONTENT_TYPE}});c.versions.push({id:versionId,number:c.versions.length+1,kind:'review',reviewId,fileKey,content:null,source:'lawyer',createdAt:stamp(),sha256:sha256Hex(bytes)});review!.editingVersionId=versionId;review!.saveStatus='saved';review!.status='reviewing';
+ await env.BUCKET.put(fileKey,bytes,{httpMetadata:{contentType:DOCX_CONTENT_TYPE}});c.versions.push({id:versionId,number:c.versions.length+1,kind:'review',reviewId,fileKey,content:null,source:'lawyer',text:extractDocxText(bytes).slice(0,100000),createdAt:stamp(),sha256:sha256Hex(bytes)});review!.editingVersionId=versionId;review!.saveStatus='saved';review!.status='reviewing';
  try{return await save(env,row,c,u);}catch(e){await env.BUCKET.delete(fileKey).catch(()=>{});throw e;}
 }
 export async function download(env:Env,u:User,id:string){

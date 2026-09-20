@@ -1,12 +1,13 @@
 {
   "result": "passed",
-  "time": "2026-09-20T04:40:36.008Z",
+  "time": "2026-09-20T08:51:48.089Z",
   "checks": [
     "administrator first login is credential-bound, reserved, and single-use",
     "roles and registration privilege boundaries",
     "template downloads require login and reject unknown template",
     "contract ownership isolation",
-    "natural description auto-selects template and persists Word without generate flag",
+    "persisted intake, idempotency, failure, retry and missing-information gate",
+    "confirmed generation checkpoint and idempotent immutable Word export",
     "review freezes draft and rejects duplicate review",
     "assignment and supplement roundtrip",
     "upload validation and immutable confirmed delivery",

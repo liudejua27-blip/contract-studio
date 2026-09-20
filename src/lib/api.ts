@@ -1,5 +1,5 @@
 export async function api<T>(path: string, body?: unknown, method?: string): Promise<T> {
-  const response = await fetch(`/api/${path}`, { method: method ?? (body === undefined ? 'GET' : 'POST'), headers: body instanceof FormData ? {} : body === undefined ? {} : { 'Content-Type': 'application/json' }, body: body instanceof FormData ? body : body === undefined ? undefined : JSON.stringify(body), credentials: 'same-origin', cache: 'no-store' }).catch(() => { throw new Error('暂时无法连接服务，请恢复连接后重试。'); });
+  const response = await fetch(`/api/${path}`, { method: method ?? (body === undefined ? 'GET' : 'POST'), headers: body instanceof FormData ? {} : body === undefined ? {} : { 'Content-Type': 'application/json' }, body: body instanceof FormData ? body : body === undefined ? undefined : JSON.stringify(body), credentials: 'same-origin', cache: 'no-store', signal:AbortSignal.timeout(path.includes('/jobs/')?80000:20000) }).catch(() => { throw new Error('暂时无法连接服务，请恢复连接后重试。'); });
   const value = await response.json().catch(() => ({})) as {data?: unknown; code?: string; error?: string};
   if (!response.ok) {
     const messages: Record<string,string> = {

@@ -1,3 +1,4 @@
+import {templateDownload} from '@/server/template-download';
 import { NextResponse } from 'next/server';
 import { ZodError } from 'zod';
 import type { Contract } from '@/lib/types';
@@ -89,6 +90,7 @@ export async function GET(request: Request, context: RouteContext): Promise<Resp
       return data(auth?.user ?? null);
     }
     if (path.length === 1 && path[0] === 'capabilities') return data(capabilities());
+    if(path.length===3&&path[0]==='templates'&&path[2]==='download'){await requireAuth(request);return templateDownload(path[1]);}
     if (path.length === 1 && path[0] === 'contracts') {
       const auth = await requireAuth(request);
       return data(await listContracts(auth.user));

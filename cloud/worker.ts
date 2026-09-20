@@ -1,3 +1,4 @@
+import {templateDownload} from '../src/server/template-download';
 import {z,ZodError} from 'zod';
 import {AppError} from './error';
 import type {Env} from './runtime';
@@ -48,6 +49,7 @@ async function api(request:Request,env:Env):Promise<Response>{
   }
  }
  if(!user)throw new AppError(401,'请先登录。','UNAUTHENTICATED');
+ if(p[0]==='templates'&&p.length===3&&p[2]==='download'&&method==='GET')return templateDownload(p[1]);
  if(p[0]==='users'){
   if(user.role!=='admin')throw new AppError(403,'需要管理员权限。','FORBIDDEN');
   if(p.length===1&&method==='GET')return json((await env.DB.prepare('SELECT * FROM users ORDER BY created_at').all()).results.map(publicUser));

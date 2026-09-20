@@ -1,0 +1,42 @@
+合同工作室模板库 · 第三方来源与署名
+
+Bonterms Mutual NDA v1.0 © 2021 Bonterms
+https://github.com/Bonterms/Mutual-NDA/blob/1b6e3a67176d47bbb89633bd4ec2be2c32d6cacf/Mutual-NDA.md
+Bonterms Cloud Terms v1.0 / Bonterms Professional Services Agreement v1.1
+https://github.com/Bonterms/Cloud-Terms
+https://github.com/Bonterms/Professional-Services-Agreement
+CC BY 4.0: https://creativecommons.org/licenses/by/4.0/legalcode
+本库借鉴条款组织方式并独立改写为中文起草要点和占位模板，删除外国法律适用及默认商业数值，补入中国大陆适用范围、必填信息与人工复核提示。非官方译本；原作者未为本库背书。由上述材料改写的内容按 CC BY 4.0 使用。
+
+Contract Review Skill v3.0.0 — Christopher Sheehan
+https://github.com/evolsb/claude-legal-skill/blob/bca0d2e9d5ec81298ddfbfde78fa4f38fb4589b0/skill.md
+仅借鉴分类、立场、原文定位与缺项检查方法，没有导入美国法判断和市场阈值。未安装或执行任何第三方脚本。
+
+MIT License
+
+Copyright (c) 2026 Christopher Sheehan
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+
+国内依据：中华人民共和国民法典（市场监管总局公开原文）
+https://www.samr.gov.cn/zw/zfxxgk/fdzdgknr/bgt/art/2023/art_60fb3863b7364b759123a42d1df568ca.html
+官方示范文本检索入口：https://htsfwb.samr.gov.cn/
+本库不是官方示范文本的完整移植，所有本地模板待律师审定。
+

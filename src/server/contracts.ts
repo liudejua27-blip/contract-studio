@@ -1,3 +1,5 @@
+import {getTemplate} from '../lib/contract-library/catalog';
+import {annotateMessage} from '../lib/contract-library/engine';
 import { createHash, randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { SignJWT } from 'jose';
@@ -94,6 +96,7 @@ const createContractInput = z.object({
 const chatInput = z.object({
   message: z.string().trim().min(1).max(50_000),
   mode: z.enum(['demo', 'live']).default('live'),
+  templateId: z.string().refine(id=>!!getTemplate(id)).optional(),
   generate: z.boolean().default(false),
 });
 
@@ -350,6 +353,7 @@ export async function chatContract(actor: AuthContext['user'], contractId: strin
     mode: parsed.mode as AiMode,
     generate: parsed.generate,
     prompt: parsed.message,
+    templateId: parsed.templateId,
     title: current.title,
     messages: current.messages,
     existingDocumentText,
@@ -373,7 +377,7 @@ export async function chatContract(actor: AuthContext['user'], contractId: strin
     }
     await client.query(
       'INSERT INTO messages (id, contract_id, role, content) VALUES ($1, $2, $3, $4), ($5, $2, $6, $7)',
-      [userMessageId, contractId, 'user', parsed.message, assistantMessageId, 'assistant', generated.reply],
+      [userMessageId, contractId, 'user', annotateMessage(parsed.message,parsed.templateId), assistantMessageId, 'assistant', generated.reply],
     );
     if (versionId && fileKey && generated.content && sha256) {
       const max = await client.query<{ max: number | null }>('SELECT MAX(number) AS max FROM versions WHERE contract_id = $1', [contractId]);

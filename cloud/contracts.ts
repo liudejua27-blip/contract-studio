@@ -1,3 +1,5 @@
+import {getTemplate} from '../src/lib/contract-library/catalog';
+import {annotateMessage} from '../src/lib/contract-library/engine';
 import {z} from 'zod';
 import type {Contract,Review,User,Version} from '../src/lib/types';
 import type {Env} from './runtime';
@@ -33,14 +35,14 @@ export async function create(env:Env,u:User,input:unknown){
  await env.DB.prepare('INSERT INTO contracts(id,owner_id,state,revision,updated_at) VALUES(?,?,?,0,?)').bind(c.id,u.id,JSON.stringify(c),date).run();return c;
 }
 export async function chat(env:Env,u:User,id:string,input:unknown){
- const v=z.object({message:z.string().trim().min(1).max(16000),generate:z.boolean().default(false),mode:z.literal('live').default('live')}).parse(input);
+ const v=z.object({message:z.string().trim().min(1).max(16000),generate:z.boolean().default(false),mode:z.literal('live').default('live'),templateId:z.string().refine(id=>!!getTemplate(id)).optional()}).parse(input);
  const {row,contract:c}=await load(env,id,u);if(u.role!=='client'||c.ownerId!==u.id)fail('FORBIDDEN','无权起草此合同。',403);
  if(c.reviews.some(r=>r.status!=='completed'))fail('REVIEW_VERSION_FROZEN');
  await limit(env,`ai:${u.id}`,20,3600000);
  let existingDocumentText:string|undefined;const current=c.versions.at(-1);
  if(current){const file=await env.BUCKET.get(current.fileKey);if(!file)fail('FILE_NOT_FOUND','当前版本文件暂时不可用。',503);existingDocumentText=extractDocxText(Buffer.from(await file!.arrayBuffer()));}
- const generated=await generateContractReply({mode:'live',generate:v.generate,prompt:v.message,title:c.title,messages:c.messages,existingDocumentText,environment:{CONTRACT_AI_API_KEY:env.CONTRACT_AI_API_KEY,CONTRACT_AI_BASE_URL:env.CONTRACT_AI_BASE_URL||'https://api.deepseek.com',CONTRACT_AI_MODEL:env.CONTRACT_AI_MODEL||'deepseek-v4-pro',CONTRACT_AI_TIMEOUT_MS:env.CONTRACT_AI_TIMEOUT_MS||'180000'}});
- c.messages.push({id:crypto.randomUUID(),role:'user',content:v.message,createdAt:stamp()},{id:crypto.randomUUID(),role:'assistant',content:generated.reply,createdAt:stamp()});
+ const generated=await generateContractReply({mode:'live',generate:v.generate,prompt:v.message,templateId:v.templateId,title:c.title,messages:c.messages,existingDocumentText,environment:{CONTRACT_AI_API_KEY:env.CONTRACT_AI_API_KEY,CONTRACT_AI_BASE_URL:env.CONTRACT_AI_BASE_URL||'https://api.deepseek.com',CONTRACT_AI_MODEL:env.CONTRACT_AI_MODEL||'deepseek-v4-pro',CONTRACT_AI_TIMEOUT_MS:env.CONTRACT_AI_TIMEOUT_MS||'180000'}});
+ c.messages.push({id:crypto.randomUUID(),role:'user',content:annotateMessage(v.message,v.templateId),createdAt:stamp()},{id:crypto.randomUUID(),role:'assistant',content:generated.reply,createdAt:stamp()});
  let fileKey:string|undefined;
  if(v.generate&&generated.content){const bytes=await renderContract(generated.content);const versionId=crypto.randomUUID();fileKey=`contracts/${id}/${versionId}.docx`;await env.BUCKET.put(fileKey,bytes,{httpMetadata:{contentType:DOCX_CONTENT_TYPE}});c.versions.push({id:versionId,number:c.versions.length+1,kind:'draft',fileKey,content:generated.content,createdAt:stamp(),source:'ai',sha256:sha256Hex(bytes)});c.title=generated.content.title;}
  try{return await save(env,row,c,u);}catch(error){if(fileKey)await env.BUCKET.delete(fileKey).catch(()=>{});throw error;}

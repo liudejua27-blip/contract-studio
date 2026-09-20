@@ -414,6 +414,10 @@ export async function renderContract(content: ContractContent): Promise<Buffer> 
     children.push(...paragraphLines(section?.content));
   });
 
+  if(content.drafting){
+    children.push(...paragraphLines(`起草参考：${content.drafting.templateName} / ${content.drafting.templateVersion}。本模板与自动检查均待律师审定。以下为来源说明，不属于双方交易条款。`));
+    for(const source of content.drafting.sources) children.push(...paragraphLines(`${source.name}；${source.license}；${source.url}。${source.use}`));
+  }
   if (missing.length > 0) {
     children.push(new Paragraph({
       heading: HeadingLevel.HEADING_1,

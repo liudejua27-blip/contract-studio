@@ -45,19 +45,21 @@ export function workflowStore(env:Env,u:User,id:string):WorkflowStore{return{
 export async function chat(env:Env,u:User,id:string,input:unknown){return startWorkflow(workflowStore(env,u,id),u,input);}
 export async function jobAction(env:Env,u:User,id:string,jobId:string,action:'run'|'retry'|'cancel'){return controlWorkflow(workflowStore(env,u,id),u,jobId,action);}
 export async function submit(env:Env,u:User,id:string,input:unknown){
- const v=z.object({versionId:z.string().uuid(),stance:z.string().trim().min(1).max(100),concerns:z.string().trim().max(3000).default('')}).parse(input);
+ const v=z.object({versionId:z.string().uuid(),lawyerId:z.string().uuid().optional(),stance:z.string().trim().min(1).max(100),concerns:z.string().trim().max(3000).default('')}).parse(input);
  const {row,contract:c}=await load(env,id,u);if(c.ownerId!==u.id||u.role!=='client')fail('FORBIDDEN','仅合同所有者可送审。',403);
  if(activeJob(c))fail('JOB_ACTIVE','请等待当前起草完成。');
  if(c.reviews.some(r=>r.status!=='completed'))fail('REVIEW_ALREADY_OPEN');
  if(!c.versions.some(x=>x.id===v.versionId))fail('VERSION_NOT_FOUND','版本不存在。',404);
- c.reviews.push({id:crypto.randomUUID(),submittedVersionId:v.versionId,lawyerId:null,status:'waiting',stance:v.stance,concerns:v.concerns,requirements:c.messages.map(m=>`${m.role==='user'?'用户':'AI'}：${m.content}`).join('\n'),submittedAt:stamp(),messages:[]});return save(env,row,c,u);
+ const selected=v.lawyerId?await env.DB.prepare("SELECT id,name FROM users WHERE id=? AND role='lawyer' AND disabled=0").bind(v.lawyerId).first<{id:string;name:string}>():null;
+ if(v.lawyerId&&!selected)fail('LAWYER_UNAVAILABLE','该律师目前无法接收审核，请重新选择。',400);
+ c.reviews.push({id:crypto.randomUUID(),submittedVersionId:v.versionId,lawyerId:selected?.id||null,lawyerName:selected?.name,status:'waiting',stance:v.stance,concerns:v.concerns,requirements:c.messages.map(m=>`${m.role==='user'?'用户':'AI'}：${m.content}`).join('\n'),submittedAt:stamp(),messages:[]});return save(env,row,c,u);
 }
 export async function reviewAction(env:Env,u:User,id:string,reviewId:string,action:string,input:any){
  const {row,contract:c}=await load(env,id,u);const r=c.reviews.find(r=>r.id===reviewId);if(!r)fail('REVIEW_NOT_FOUND','审核不存在。',404);const review=r!;
  if(review.status==='completed')fail('REVIEW_COMPLETED');
  if(action==='assign'){
   if(u.role!=='admin')fail('FORBIDDEN','仅管理员可分配律师。',403);
-  const target=await env.DB.prepare("SELECT id FROM users WHERE id=? AND role='lawyer' AND disabled=0").bind(String(input.lawyerId||'')).first();if(!target)fail('INVALID_INPUT','请选择正常的律师账号。',400);review.lawyerId=String(target!.id);
+  const target=await env.DB.prepare("SELECT id,name FROM users WHERE id=? AND role='lawyer' AND disabled=0").bind(String(input.lawyerId||'')).first();if(!target)fail('INVALID_INPUT','请选择正常的律师账号。',400);review.lawyerId=String(target!.id);review.lawyerName=String(target!.name);
  }else if(action==='messages'){
   if(u.id!==review.lawyerId&&u.id!==c.ownerId)fail('FORBIDDEN','无权参与此审核沟通。',403);
   const v=z.object({content:z.string().trim().min(1).max(6000),requestInfo:z.boolean().optional()}).parse(input);review.messages.push({id:crypto.randomUUID(),authorId:u.id,authorName:u.name,content:v.content,createdAt:stamp()});if(u.id===review.lawyerId&&v.requestInfo)review.status='need_info';else if(u.id===c.ownerId&&review.status==='need_info')review.status='reviewing';

@@ -50,6 +50,7 @@ async function api(request:Request,env:Env):Promise<Response>{
  }
  if(!user)throw new AppError(401,'请先登录。','UNAUTHENTICATED');
  if(p[0]==='templates'&&p.length===3&&p[2]==='download'&&method==='GET')return templateDownload(p[1]);
+ if(p.length===1&&p[0]==='lawyers'&&method==='GET')return json((await env.DB.prepare("SELECT id,name FROM users WHERE role='lawyer' AND disabled=0 ORDER BY name,id").all()).results);
  if(p[0]==='users'){
   if(user.role!=='admin')throw new AppError(403,'需要管理员权限。','FORBIDDEN');
   if(p.length===1&&method==='GET')return json((await env.DB.prepare('SELECT * FROM users ORDER BY created_at').all()).results.map(publicUser));

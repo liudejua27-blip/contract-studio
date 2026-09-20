@@ -28,6 +28,7 @@ import {
   createUserAsAdmin,
   getAuthContext,
   listUsers,
+  listAvailableLawyers,
   login,
   registerClient,
   requireAuth,
@@ -91,6 +92,7 @@ export async function GET(request: Request, context: RouteContext): Promise<Resp
     }
     if (path.length === 1 && path[0] === 'capabilities') return data(capabilities());
     if(path.length===3&&path[0]==='templates'&&path[2]==='download'){await requireAuth(request);return templateDownload(path[1]);}
+    if(path.length===1&&path[0]==='lawyers'){await requireAuth(request);return data(await listAvailableLawyers());}
     if (path.length === 1 && path[0] === 'contracts') {
       const auth = await requireAuth(request);
       return data(await listContracts(auth.user));

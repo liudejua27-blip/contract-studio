@@ -463,3 +463,7 @@ export async function verifyScopedToken(token: string, expected: {
 export function sessionCookieName(): string {
   return SESSION_COOKIE;
 }
+
+export async function listAvailableLawyers(){
+  return (await query<{id:string;name:string}>("SELECT id,name FROM users WHERE role='lawyer' AND disabled=false ORDER BY name,id")).rows;
+}

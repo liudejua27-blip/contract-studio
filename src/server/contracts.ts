@@ -59,6 +59,7 @@ type ReviewRow = {
   id: string;
   submitted_version_id: string;
   lawyer_id: string | null;
+  lawyer_name?: string;
   status: Review['status'];
   stance: string;
   concerns: string;
@@ -105,6 +106,7 @@ const chatInput = z.object({
 });
 
 const reviewInput = z.object({
+  lawyerId: z.string().uuid().optional(),
   versionId: z.string().trim().min(1),
   stance: z.string().trim().min(1).max(10_000),
   concerns: z.string().trim().max(50_000).default(''),
@@ -162,6 +164,7 @@ function mapReview(row: ReviewRow, messages: ReviewMessage[]): Review {
     id: row.id,
     submittedVersionId: row.submitted_version_id,
     lawyerId: row.lawyer_id,
+    lawyerName: row.lawyer_name,
     status: row.status,
     stance: row.stance,
     concerns: row.concerns,
@@ -227,7 +230,7 @@ async function hydrateContract(row: ContractRow, actor?: AuthContext['user']): P
       ),
     lawyerScope
       ? query<ReviewRow>(
-        `SELECT id, submitted_version_id, lawyer_id, status, stance, concerns, requirements,
+        `SELECT id, submitted_version_id, lawyer_id, (SELECT name FROM users WHERE users.id=reviews.lawyer_id) AS lawyer_name, status, stance, concerns, requirements,
                 submitted_at, completed_at, final_version_id, delivery_note,
                 editing_version_id, save_status
          FROM reviews
@@ -236,7 +239,7 @@ async function hydrateContract(row: ContractRow, actor?: AuthContext['user']): P
         [row.id, actor!.id],
       )
       : query<ReviewRow>(
-        `SELECT id, submitted_version_id, lawyer_id, status, stance, concerns, requirements,
+        `SELECT id, submitted_version_id, lawyer_id, (SELECT name FROM users WHERE users.id=reviews.lawyer_id) AS lawyer_name, status, stance, concerns, requirements,
                 submitted_at, completed_at, final_version_id, delivery_note,
                 editing_version_id, save_status
          FROM reviews WHERE contract_id = $1 ORDER BY submitted_at DESC, id DESC`,
@@ -374,12 +377,16 @@ export async function submitReview(actor: AuthContext['user'], contractId: strin
       'SELECT role, content FROM messages WHERE contract_id = $1 ORDER BY seq ASC',
       [contractId],
     );
+    if(parsed.lawyerId){
+      const target=await client.query("SELECT id FROM users WHERE id=$1 AND role='lawyer' AND disabled=false FOR SHARE",[parsed.lawyerId]);
+      if(!target.rows[0])throw new AppError(400,'该律师目前无法接收审核，请重新选择。','LAWYER_UNAVAILABLE');
+    }
     const requirements = messages.rows.map((message) => `${message.role === 'user' ? '客户' : '助手'}：${message.content}`).join('\n');
     await client.query(
       `INSERT INTO reviews
-       (id, contract_id, submitted_version_id, status, stance, concerns, requirements)
-       VALUES ($1, $2, $3, 'waiting', $4, $5, $6)`,
-      [randomUUID(), contractId, parsed.versionId, parsed.stance, parsed.concerns, requirements],
+       (id, contract_id, submitted_version_id, status, stance, concerns, requirements, lawyer_id)
+       VALUES ($1, $2, $3, 'waiting', $4, $5, $6, $7)`,
+      [randomUUID(), contractId, parsed.versionId, parsed.stance, parsed.concerns, requirements, parsed.lawyerId||null],
     );
     await client.query('UPDATE contracts SET updated_at = now() WHERE id = $1', [contractId]);
   });

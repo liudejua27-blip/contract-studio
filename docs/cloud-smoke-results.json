@@ -1,6 +1,6 @@
 {
   "result": "passed",
-  "time": "2026-09-20T08:51:48.089Z",
+  "time": "2026-09-20T09:09:51.813Z",
   "checks": [
     "administrator first login is credential-bound, reserved, and single-use",
     "roles and registration privilege boundaries",
@@ -8,6 +8,7 @@
     "contract ownership isolation",
     "persisted intake, idempotency, failure, retry and missing-information gate",
     "confirmed generation checkpoint and idempotent immutable Word export",
+    "client-selected lawyer directory, invalid targets and assignment isolation",
     "review freezes draft and rejects duplicate review",
     "assignment and supplement roundtrip",
     "upload validation and immutable confirmed delivery",

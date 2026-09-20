@@ -1,3 +1,6 @@
+import {intakeFactIssues} from '../lib/contract-library/fact-checks';
+import {PLAYBOOKS} from '../lib/contract-library/playbooks';
+import {intakeIsCurrent} from '../lib/intake-state';
 import {z} from 'zod';
 import type {Contract,User} from '../lib/types';
 import {collectIntake,draftConfirmed,verifyConfirmedDraft} from './ai';
@@ -21,10 +24,10 @@ export async function startWorkflow(store:WorkflowStore,u:User,input:unknown){
  if(c.reviews.some(r=>r.status!=='completed'))fail('REVIEW_VERSION_FROZEN','请在律师审核沟通中补充信息。');
  if(activeJob(c))fail('JOB_ACTIVE','当前任务仍在处理，请等待或取消。');
  let phase:'understand'|'generate'='understand';
- if(v.confirmId){if(c.versions.some(version=>version.content?.confirmation?.summaryId===v.confirmId))return c;const i=c.workflow.intake;if(!i||i.summaryId!==v.confirmId||i.missing.length||i.conflicts.length)fail('CONFIRMATION_REQUIRED','约定摘要已变化，请重新核对。');i!.confirmedAt=now();phase='generate';}
+ if(v.confirmId){if(c.versions.some(version=>version.content?.confirmation?.summaryId===v.confirmId))return c;const i=c.workflow.intake;if(!i||!intakeIsCurrent(c)||i.summaryId!==v.confirmId||i.missing.length||i.conflicts.length)fail('CONFIRMATION_REQUIRED','约定摘要已变化，请重新核对。');const issues=intakeFactIssues(i!);if(issues.length||PLAYBOOKS[i!.templateId]?.fields.some(f=>!i!.facts[f.id]))fail('CONFIRMATION_REQUIRED',issues.join('；')||'起草规则已更新，请补充税费和发票安排后重新确认。');i!.confirmedAt=now();phase='generate';}
  else if(!v.message)fail('INVALID_INPUT','请输入合作需求。',400);
  await store.limit();
- if(phase==='understand'&&c.workflow.intake)delete c.workflow.intake.confirmedAt;
+ if(phase==='understand'){c.workflow.inputRevision=(c.workflow.inputRevision||0)+1;if(c.workflow.intake)delete c.workflow.intake.confirmedAt;}
  const messageId=crypto.randomUUID();c.messages.push({id:messageId,role:'user',content:v.confirmId?'我确认以下约定，生成合同：\n'+intakeSummary(c.workflow.intake!):v.message,createdAt:now()});
  c.workflow.receipts=[...(c.workflow.receipts||[]),{id:v.requestId,message:v.message,confirmId:v.confirmId}];
  c.workflow.job={id:v.requestId,messageId,phase,status:'pending',attempt:0,createdAt:now(),updatedAt:now(),versionId:crypto.randomUUID()};
@@ -53,7 +56,7 @@ export async function controlWorkflow(store:WorkflowStore,u:User,id:string,actio
   const fresh=await store.load(),current=fresh.contract,currentJob=current.workflow?.job;
   if(currentJob?.id!==id||currentJob.lease!==lease||currentJob.status!=='running')return current;
   if(current.reviews.some(r=>r.status!=='completed'))fail('REVIEW_VERSION_FROZEN','合同已送审，本次起草已停止。');
-  if(intakeResult){current.workflow!.intake=intakeResult.intake;current.messages.push({id:crypto.randomUUID(),role:'assistant',content:intakeResult.reply,createdAt:now()});currentJob.status='completed';}
+  if(intakeResult){if(intakeResult.intake)intakeResult.intake.inputRevision=current.workflow!.inputRevision||0;current.workflow!.intake=intakeResult.intake;current.messages.push({id:crypto.randomUUID(),role:'assistant',content:intakeResult.reply,createdAt:now()});currentJob.status='completed';}
   else if(j.phase==='generate'){currentJob.content=content;currentJob.phase='verify';currentJob.status='pending';}
   else if(j.phase==='verify'){currentJob.phase='export';currentJob.status='pending';}
   else if(content&&key&&sha){if(!current.versions.some(v=>v.id===j.versionId))current.versions.push({id:j.versionId,number:current.versions.length+1,kind:'draft',fileKey:key,content,source:'ai',sha256:sha,createdAt:now()});current.title=content.title;current.messages.push({id:crypto.randomUUID(),role:'assistant',content:'合同 Word 已生成，包含已确认的约定和附件。你可以下载，或提交律师审核。',createdAt:now()});currentJob.status='completed';delete currentJob.content;}

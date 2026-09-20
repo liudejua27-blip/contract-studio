@@ -1,3 +1,4 @@
+import {unsupportedFactNumbers,intakeFactIssues,draftFactIssues} from '../lib/contract-library/fact-checks';
 import {PLAYBOOKS,intakeSummary,exportProblems} from '../lib/contract-library/playbooks';
 import type {Intake} from '../lib/types';
 import { CONTRACT_TEMPLATES, getTemplate } from '../lib/contract-library/catalog';
@@ -111,6 +112,7 @@ export function validateNumericFacts(content: ContractContent, reference: string
   const dates = (text: string) => new Set(Array.from(text.matchAll(/(20\d{2})[年\/-](\d{1,2})[月\/-](\d{1,2})日?/g), m => `${Number(m[1])}-${Number(m[2])}-${Number(m[3])}`));
   const draft = JSON.stringify({title:content.title,parties:content.parties,sections:content.sections,attachments:content.attachments,signing:content.signing});
   const referenceAmounts = amounts(reference), referenceDates = dates(reference);
+  const issues=content.confirmation?draftFactIssues(content):[];if(issues.length)throw new AppError(422,issues.join('；'),'FACT_CONFLICT');
   if ([...amounts(draft)].some(value => !referenceAmounts.has(value)) || [...dates(draft)].some(value => !referenceDates.has(value))) {
     throw new AppError(502, '草稿包含需求中未确认的金额或日期，未保存该版本。请补充具体约定后重试。', 'AI_UNCONFIRMED_FACTS');
   }
@@ -209,10 +211,11 @@ reply仅在用户明确提问或寻求建议时回答业务问题，给出待确
  const r=parsed.data,p=r.templateId&&PLAYBOOKS[r.templateId];if(!p)return{reply:r.reply||'请说明双方这次具体做什么。暂不生成未覆盖类型的合同。'};
  const userTexts=messages.filter(m=>m.role==='user').map(m=>m.content);
  const facts:Record<string,{value:string;quote:string}>={};
- for(const f of r.facts){if(p.fields.some(x=>x.id===f.fieldId)&&userTexts.some(t=>t.includes(f.quote))&&!/待补充|待确认|不知道|未确定/.test(f.value))facts[f.fieldId]={value:f.value,quote:f.quote};}
+ for(const f of r.facts){if(p.fields.some(x=>x.id===f.fieldId)&&userTexts.some(t=>t.includes(f.quote))&&!unsupportedFactNumbers(f.value,f.quote)&&!/待补充|待确认|不知道|未确定/.test(f.value))facts[f.fieldId]={value:f.value,quote:f.quote};}
  const missing=p.fields.filter(f=>!facts[f.id]).map(f=>f.id);
  const intake:Intake={templateId:r.templateId!,facts,missing,conflicts:r.conflicts,summaryId:crypto.randomUUID()};
- if(r.conflicts.length)return{intake,reply:'有几处约定需要先核对：\n'+r.conflicts.join('\n')+'\n你可以直接说明以哪个为准。'};
+ intake.conflicts=[...new Set([...intake.conflicts,...intakeFactIssues(intake)])];
+ if(intake.conflicts.length)return{intake,reply:'有几处约定需要先核对：\n'+intake.conflicts.join('\n')+'\n你可以直接说明以哪个为准。'};
  if(missing.length){const questions=p.fields.filter(f=>missing.includes(f.id)).slice(0,3);return{intake,reply:(Object.keys(facts).length?'已记下你提供的约定。':'我可以帮你整理这份合同。')+(r.reply?r.reply+'\n':'')+'还需要确认：\n'+questions.map((f,i)=>`${i+1}. ${f.question}`).join('\n')+'\n直接用自己的话回答即可；不清楚的可以先问我方案。'};}
  return{intake,reply:'关键信息已整理齐，请核对下面的约定摘要。需要修改可以直接告诉我；确认后再生成 Word。'};
 }

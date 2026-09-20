@@ -1,3 +1,4 @@
+import {listQuery,summary} from '../lib/contract-list';
 import {startWorkflow,controlWorkflow,type WorkflowStore} from './workflow';
 import {getTemplate} from '../lib/contract-library/catalog';
 import {annotateMessage} from '../lib/contract-library/engine';
@@ -60,6 +61,7 @@ type ReviewRow = {
   submitted_version_id: string;
   lawyer_id: string | null;
   lawyer_name?: string;
+  handoff_version_id?:string;
   status: Review['status'];
   stance: string;
   concerns: string;
@@ -149,6 +151,7 @@ function mapVersion(row: VersionRow): Version {
   return {
     id: row.id,
     number: row.number,
+    reviewId:row.review_id||undefined,
     text:row.text_content,
     kind: row.kind,
     fileKey: row.file_key,
@@ -165,6 +168,7 @@ function mapReview(row: ReviewRow, messages: ReviewMessage[]): Review {
     submittedVersionId: row.submitted_version_id,
     lawyerId: row.lawyer_id,
     lawyerName: row.lawyer_name,
+    handoffVersionId: row.handoff_version_id,
     status: row.status,
     stance: row.stance,
     concerns: row.concerns,
@@ -232,7 +236,7 @@ async function hydrateContract(row: ContractRow, actor?: AuthContext['user']): P
       ? query<ReviewRow>(
         `SELECT id, submitted_version_id, lawyer_id, (SELECT name FROM users WHERE users.id=reviews.lawyer_id) AS lawyer_name, status, stance, concerns, requirements,
                 submitted_at, completed_at, final_version_id, delivery_note,
-                editing_version_id, save_status
+                editing_version_id, save_status, handoff_version_id
          FROM reviews
          WHERE contract_id = $1 AND lawyer_id = $2
          ORDER BY submitted_at DESC, id DESC`,
@@ -241,7 +245,7 @@ async function hydrateContract(row: ContractRow, actor?: AuthContext['user']): P
       : query<ReviewRow>(
         `SELECT id, submitted_version_id, lawyer_id, (SELECT name FROM users WHERE users.id=reviews.lawyer_id) AS lawyer_name, status, stance, concerns, requirements,
                 submitted_at, completed_at, final_version_id, delivery_note,
-                editing_version_id, save_status
+                editing_version_id, save_status, handoff_version_id
          FROM reviews WHERE contract_id = $1 ORDER BY submitted_at DESC, id DESC`,
         [row.id],
       ),
@@ -400,7 +404,7 @@ async function reviewForActor(clientOrQuery: PoolClient | undefined, contractId:
 }> {
   const sql = `SELECT r.id, r.submitted_version_id, r.lawyer_id, r.status, r.stance, r.concerns,
                       r.requirements, r.submitted_at, r.completed_at, r.final_version_id,
-                      r.delivery_note, r.editing_version_id, r.save_status, c.owner_id
+                      r.delivery_note, r.editing_version_id, r.save_status, r.handoff_version_id, c.owner_id
                FROM reviews r JOIN contracts c ON c.id = r.contract_id
                WHERE r.id = $1 AND r.contract_id = $2 LIMIT 1`;
   const lock = clientOrQuery ? ' FOR UPDATE' : '';
@@ -460,6 +464,7 @@ export async function addReviewMessage(actor: AuthContext['user'], contractId: s
     await lockContract(client, contractId);
     const current = await reviewForActor(client, contractId, reviewId);
     if (!canReviewMessage(actor, current)) throw new AppError(403, 'You cannot message this review.', 'FORBIDDEN');
+    if (current.review.status === 'waiting')throw new AppError(409,'请先接收审核任务。','REVIEW_NOT_STARTED');
     if (current.review.status === 'completed') throw new AppError(409, 'The delivered review is read-only.', 'REVIEW_COMPLETED');
     if (parsed.requestInfo && (actor.role !== 'lawyer' || current.lawyerId !== actor.id)) {
       throw new AppError(403, 'Only the assigned lawyer can request information.', 'FORBIDDEN');
@@ -506,6 +511,7 @@ export async function uploadReviewVersion(actor: AuthContext['user'], contractId
     await lockContract(client, contractId);
     const locked = await reviewForActor(client, contractId, reviewId);
     if (locked.lawyerId !== actor.id) throw new AppError(403, 'Only the assigned lawyer can upload a review version.', 'FORBIDDEN');
+    if (locked.review.status === 'waiting')throw new AppError(409,'请先接收审核任务。','REVIEW_NOT_STARTED');
     if (locked.review.status === 'completed') throw new AppError(409, 'The delivered review is read-only.', 'REVIEW_COMPLETED');
     const max = await client.query<{ max: number | null }>('SELECT MAX(number) AS max FROM versions WHERE contract_id = $1', [contractId]);
     const number = Number(max.rows[0]?.max ?? 0) + 1;
@@ -645,7 +651,7 @@ async function ensureEditorSession(actor: AuthContext['user'], contractId: strin
     // callback may advance the review's immutable version, but the current
     // OnlyOffice document/key remains bound to this session until it closes.
     if (existing.rows[0]) return existing.rows[0];
-    const candidateVersionId = current.review.editing_version_id ?? current.review.submitted_version_id;
+    const candidateVersionId = current.review.editing_version_id ?? current.review.handoff_version_id ?? current.review.submitted_version_id;
     const candidate = await client.query<{ id: string; file_key: string; number: number }>(
       'SELECT id, file_key, number FROM versions WHERE id = $1 AND contract_id = $2 LIMIT 1',
       [candidateVersionId, contractId],
@@ -678,7 +684,7 @@ export async function editorConfig(actor: AuthContext['user'], contractId: strin
   if (!isAssigned && !isOwner && actor.role !== 'admin') throw new AppError(403, 'You cannot open this editor.', 'FORBIDDEN');
   if (!isAssigned && !viewOnly && actor.role !== 'admin') throw new AppError(403, 'Only the assigned lawyer can edit.', 'FORBIDDEN');
   const session = isAssigned ? await ensureEditorSession(actor, contractId, reviewId) : null;
-  const versionId = session?.base_version_id ?? current.review.editing_version_id ?? current.review.submitted_version_id;
+  const versionId = session?.base_version_id ?? current.review.editing_version_id ?? current.review.handoff_version_id ?? current.review.submitted_version_id;
   const version = await query<{ id: string; number: number; file_key: string; title: string }>(
     `SELECT v.id, v.number, v.file_key, c.title
      FROM versions v JOIN contracts c ON c.id = v.contract_id
@@ -981,4 +987,29 @@ export async function persistOnlyOfficeRevision(input: PersistOnlyOfficeRevision
 export async function readUploadFile(value: FormDataEntryValue | null): Promise<{ name: string; type: string; bytes: Buffer }> {
   if (!value || typeof value === 'string') throw new AppError(400, 'A DOCX file is required.', 'FILE_REQUIRED');
   return { name: value.name, type: value.type, bytes: Buffer.from(await value.arrayBuffer()) };
+}
+
+export async function transferReview(actor:User,contractId:string,reviewId:string,input:unknown){
+ if(actor.role!=='admin')throw new AppError(403,'仅管理员可以转交审核。','FORBIDDEN');
+ const v=z.object({lawyerId:z.string().uuid(),reason:z.string().trim().min(1).max(1000)}).parse(input);
+ await withTransaction(async client=>{
+  await lockContract(client,contractId);const {review:r}=await reviewForActor(client,contractId,reviewId);
+  if(r.status==='completed')throw new AppError(409,'已交付审核不能转交。','REVIEW_COMPLETED');
+  if(r.lawyer_id===v.lawyerId)return;
+  const target=await client.query("SELECT name FROM users WHERE id=$1 AND role='lawyer' AND disabled=false FOR SHARE",[v.lawyerId]);
+  if(!target.rows[0])throw new AppError(400,'请选择正常的律师账号。','INVALID_LAWYER');
+  await client.query("UPDATE reviews SET lawyer_id=$1,handoff_version_id=COALESCE(editing_version_id,handoff_version_id),editing_version_id=NULL,save_status=NULL,status='waiting' WHERE id=$2",[v.lawyerId,reviewId]);
+  await client.query('UPDATE editor_sessions SET active=false WHERE review_id=$1',[reviewId]);
+  await client.query('INSERT INTO review_messages(id,review_id,author_id,content) VALUES($1,$2,$3,$4)',[randomUUID(),reviewId,actor.id,'审核已转交给'+target.rows[0].name+'。原因：'+v.reason+'。请新律师接收并重新上传确认的审阅版。']);
+  await client.query('UPDATE contracts SET updated_at=now() WHERE id=$1',[contractId]);
+ });return requireAccessible(contractId,actor);
+}
+
+export async function listContractPage(actor:User,input:unknown){
+ const v=listQuery.parse(input),args:unknown[]=[actor.role,actor.id,v.q];
+ let where=" WHERE ($1='admin' OR ($1='client' AND c.owner_id=$2) OR ($1='lawyer' AND EXISTS(SELECT 1 FROM reviews r WHERE r.contract_id=c.id AND r.lawyer_id=$2))) AND strpos(lower(c.title),lower($3))>0";
+ if(v.filter!=='all')where+=" AND EXISTS(SELECT 1 FROM reviews r WHERE r.contract_id=c.id AND ($1<>'lawyer' OR r.lawyer_id=$2) AND r.status"+(v.filter==='completed'?"='completed'":"<>'completed'")+")";
+ const total=await query<{n:string}>('SELECT count(*) AS n FROM contracts c'+where,args);
+ const rows=await query<ContractRow>('SELECT c.*,u.name AS owner_name FROM contracts c JOIN users u ON u.id=c.owner_id'+where+' ORDER BY c.updated_at DESC,c.id DESC LIMIT 20 OFFSET $4',[...args,(v.page-1)*20]);
+ const items=await Promise.all(rows.rows.map(async r=>summary(await hydrateContract(r,actor))));return{items,page:v.page,total:Number(total.rows[0].n),hasMore:v.page*20<Number(total.rows[0].n)};
 }

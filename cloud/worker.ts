@@ -68,6 +68,7 @@ async function api(request:Request,env:Env):Promise<Response>{
   }
  }
  if(p[0]==='files'&&p.length===2&&method==='GET')return contracts.download(env,user,p[1]);
+ if(p.length===1&&p[0]==='contract-list'&&method==='GET')return json(await contracts.listPage(env,user,Object.fromEntries(url.searchParams)));
  if(p[0]==='contracts'){
   if(p.length===1&&method==='GET')return json(await contracts.list(env,user));
   if(p.length===1&&method==='POST')return json(await contracts.create(env,user,input),201);

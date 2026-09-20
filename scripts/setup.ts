@@ -86,6 +86,7 @@ CREATE TABLE IF NOT EXISTS reviews (
   editing_version_id text REFERENCES versions(id),
   save_status text CHECK (save_status IN ('saved', 'pending', 'error'))
 );
+ALTER TABLE reviews ADD COLUMN IF NOT EXISTS handoff_version_id text REFERENCES versions(id);
 CREATE INDEX IF NOT EXISTS reviews_contract_idx ON reviews(contract_id, submitted_at DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS reviews_one_open_per_contract_idx
   ON reviews(contract_id)

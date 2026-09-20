@@ -1,3 +1,4 @@
+import {listQuery,summary} from '../src/lib/contract-list';
 import {startWorkflow,controlWorkflow,activeJob,type WorkflowStore} from '../src/server/workflow';
 import {getTemplate} from '../src/lib/contract-library/catalog';
 import {annotateMessage} from '../src/lib/contract-library/engine';
@@ -57,17 +58,22 @@ export async function submit(env:Env,u:User,id:string,input:unknown){
 export async function reviewAction(env:Env,u:User,id:string,reviewId:string,action:string,input:any){
  const {row,contract:c}=await load(env,id,u);const r=c.reviews.find(r=>r.id===reviewId);if(!r)fail('REVIEW_NOT_FOUND','审核不存在。',404);const review=r!;
  if(review.status==='completed')fail('REVIEW_COMPLETED');
- if(action==='assign'){
+ if(action==='assign'||action==='transfer'){
   if(u.role!=='admin')fail('FORBIDDEN','仅管理员可分配律师。',403);
+  if(action==='assign'&&review.status!=='waiting')fail('REVIEW_NOT_ASSIGNABLE','审核已开始，请使用转交并填写原因。');
+  if(String(input.lawyerId||'')===review.lawyerId)return view(c,u);
+  const reason=action==='transfer'?z.string().trim().min(1).max(1000).parse(input.reason):'';
   const target=await env.DB.prepare("SELECT id,name FROM users WHERE id=? AND role='lawyer' AND disabled=0").bind(String(input.lawyerId||'')).first();if(!target)fail('INVALID_INPUT','请选择正常的律师账号。',400);review.lawyerId=String(target!.id);review.lawyerName=String(target!.name);
+  if(action==='transfer'){review.handoffVersionId=review.editingVersionId||review.handoffVersionId;review.editingVersionId=undefined;review.saveStatus=undefined;review.status='waiting';review.messages.push({id:crypto.randomUUID(),authorId:u.id,authorName:u.name,content:'审核已转交给'+review.lawyerName+'。原因：'+reason+'。请新律师接收并重新上传确认的审阅版。',createdAt:stamp()});}
  }else if(action==='messages'){
   if(u.id!==review.lawyerId&&u.id!==c.ownerId)fail('FORBIDDEN','无权参与此审核沟通。',403);
   const v=z.object({content:z.string().trim().min(1).max(6000),requestInfo:z.boolean().optional()}).parse(input);review.messages.push({id:crypto.randomUUID(),authorId:u.id,authorName:u.name,content:v.content,createdAt:stamp()});if(u.id===review.lawyerId&&v.requestInfo)review.status='need_info';else if(u.id===c.ownerId&&review.status==='need_info')review.status='reviewing';
  }else{
   if(u.role!=='lawyer'||u.id!==review.lawyerId)fail('FORBIDDEN','仅被分配的律师可执行此操作。',403);
-  if(action==='start'){review.status='reviewing';}
+  if(action==='start'){if(!['waiting','reviewing'].includes(review.status))fail('REVIEW_NOT_STARTABLE','请先完成补充信息沟通。');review.status='reviewing';}
   else if(action==='complete'){
    const v=z.object({versionId:z.string().uuid(),deliveryNote:z.string().trim().min(1).max(6000)}).parse(input);
+   if(review.status==='waiting')fail('REVIEW_NOT_STARTED','请先接收审核任务。');
    if(v.versionId!==review.editingVersionId||review.saveStatus!=='saved')fail('VERSION_NOT_CURRENT');
    const version=c.versions.find(x=>x.id===v.versionId&&x.reviewId===review.id);if(!version)fail('VERSION_NOT_CURRENT');const stored=await env.BUCKET.get(version!.fileKey);if(!stored||sha256Hex(Buffer.from(await stored.arrayBuffer()))!==version!.sha256)fail('FILE_NOT_FOUND','交付文件暂时不可用，请重试。',503);
    review.status='completed';review.finalVersionId=v.versionId;review.deliveryNote=v.deliveryNote;review.completedAt=stamp();
@@ -78,6 +84,7 @@ export async function reviewAction(env:Env,u:User,id:string,reviewId:string,acti
 export async function upload(env:Env,u:User,id:string,reviewId:string,file:File){
  const {row,contract:c}=await load(env,id,u);const review=c.reviews.find(r=>r.id===reviewId);if(!review)fail('REVIEW_NOT_FOUND','审核不存在。',404);
  if(u.role!=='lawyer'||review!.lawyerId!==u.id)fail('FORBIDDEN','仅被分配的律师可上传审阅版。',403);if(review!.status==='completed')fail('REVIEW_COMPLETED');
+ if(review!.status==='waiting')fail('REVIEW_NOT_STARTED','请先接收审核任务。');
  if(!file||!file.name.toLowerCase().endsWith('.docx'))fail('INVALID_FILE_TYPE','请上传 Word DOCX。',400);
  const bytes=Buffer.from(await file.arrayBuffer());try{validateDocxBuffer(bytes,{maxCompressedBytes:10*1024*1024,maxUncompressedBytes:24*1024*1024,maxEntryBytes:12*1024*1024,maxEntries:512});}catch{fail('INVALID_DOCX','文件无效或解压后超过大小限制。',400);}
  const versionId=crypto.randomUUID(),fileKey=`contracts/${id}/${versionId}.docx`;
@@ -87,4 +94,17 @@ export async function upload(env:Env,u:User,id:string,reviewId:string,file:File)
 export async function download(env:Env,u:User,id:string){
  const row=await env.DB.prepare("SELECT * FROM contracts WHERE EXISTS(SELECT 1 FROM json_each(state,'$.versions') WHERE json_extract(value,'$.id')=?) LIMIT 1").bind(id).first<Row>();if(!row)fail('VERSION_NOT_FOUND','文件不存在。',404);const c=view(JSON.parse(row!.state),u);const v=c.versions.find(x=>x.id===id);if(!v)fail('VERSION_NOT_FOUND','文件不存在。',404);const file=await env.BUCKET.get(v!.fileKey);if(!file)fail('FILE_NOT_FOUND','文件暂时不可用。',503);
  return new Response(file!.body,{headers:{'Content-Type':DOCX_CONTENT_TYPE,'Cache-Control':'private, no-store','Content-Disposition':`attachment; filename*=UTF-8''${encodeURIComponent(c.title.replace(/[\r\n]/g,'').slice(0,100)+'-v'+v!.number+'.docx')}`}});
+}
+
+export async function listPage(env:Env,u:User,input:unknown){
+ const v=listQuery.parse(input),args:unknown[]=[];const clauses:string[]=[];
+ if(u.role==='client'){clauses.push('owner_id=?');args.push(u.id);}
+ const reviewScope=u.role==='lawyer'?" AND json_extract(r.value,'$.lawyerId')=?":"";
+ if(u.role==='lawyer'){clauses.push("EXISTS(SELECT 1 FROM json_each(state,'$.reviews') r WHERE json_extract(r.value,'$.lawyerId')=?)");args.push(u.id);}
+ if(v.q){clauses.push("instr(lower(json_extract(state,'$.title')),lower(?))>0");args.push(v.q);}
+ if(v.filter!=='all'){clauses.push("EXISTS(SELECT 1 FROM json_each(state,'$.reviews') r WHERE json_extract(r.value,'$.status')"+(v.filter==='completed'?"='completed'":"<>'completed'")+reviewScope+")");if(u.role==='lawyer')args.push(u.id);}
+ const where=clauses.length?' WHERE '+clauses.join(' AND '):'';
+ const total=await env.DB.prepare('SELECT count(*) AS n FROM contracts'+where).bind(...args).first<{n:number}>();
+ const rows=await env.DB.prepare('SELECT * FROM contracts'+where+' ORDER BY updated_at DESC,id DESC LIMIT 20 OFFSET ?').bind(...args,(v.page-1)*20).all<Row>();
+ return{items:rows.results.map(r=>summary(view(JSON.parse(r.state),u))),page:v.page,total:total!.n,hasMore:v.page*20<total!.n};
 }

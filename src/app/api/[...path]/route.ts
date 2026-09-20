@@ -92,6 +92,7 @@ export async function GET(request: Request, context: RouteContext): Promise<Resp
     }
     if (path.length === 1 && path[0] === 'capabilities') return data(capabilities());
     if(path.length===3&&path[0]==='templates'&&path[2]==='download'){await requireAuth(request);return templateDownload(path[1]);}
+    if(path.length===1&&path[0]==='contract-list'){const auth=await requireAuth(request);const {listContractPage}=await import('@/server/contracts');return data(await listContractPage(auth.user,Object.fromEntries(new URL(request.url).searchParams)));}
     if(path.length===1&&path[0]==='lawyers'){await requireAuth(request);return data(await listAvailableLawyers());}
     if (path.length === 1 && path[0] === 'contracts') {
       const auth = await requireAuth(request);
@@ -199,6 +200,7 @@ export async function POST(request: Request, context: RouteContext): Promise<Res
       const auth = await requireAuth(request);
       return data(await submitReview(auth.user, path[1], await body(request)), 201);
     }
+    if(path.length===5&&path[0]==='contracts'&&path[2]==='reviews'&&path[4]==='transfer'){const auth=await requireAuth(request);const {transferReview}=await import('@/server/contracts');return data(await transferReview(auth.user,path[1],path[3],await body(request)));}
     if (path.length === 5 && path[0] === 'contracts' && path[2] === 'reviews' && path[4] === 'assign') {
       const auth = await requireAuth(request);
       const input = await body(request);

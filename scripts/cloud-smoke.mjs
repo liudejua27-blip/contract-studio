@@ -1,10 +1,12 @@
 import {Miniflare} from 'miniflare';
 import {readFile,writeFile,readdir} from 'node:fs/promises';
 import assert from 'node:assert/strict';
-import {randomBytes,createHash} from 'node:crypto';
+import {randomBytes,createHash,pbkdf2Sync} from 'node:crypto';
 const bootstrap=randomBytes(32).toString('hex');
+const password=randomBytes(20).toString('hex'),salt=randomBytes(32).toString('hex');
+const adminHash='pbkdf2$100000$'+salt+'$'+pbkdf2Sync(password,salt,100000,32,'sha256').toString('hex');
 const content={title:'云端验收合同',parties:[{role:'甲方',name:'测试甲公司'},{role:'乙方',name:'测试乙公司'}],sections:[{title:'费用',content:'人民币20000元，其他条件待补充。'}],signing:'待补充',missing:['日期']};
-const mf=new Miniflare({workers:[{name:"contract",modules:true,scriptPath:'dist/server/index.js',compatibilityDate:'2026-08-01',compatibilityFlags:['nodejs_compat'],d1Databases:['DB'],r2Buckets:['BUCKET'],bindings:{CONTRACT_BOOTSTRAP_SECRET:bootstrap,CONTRACT_AI_API_KEY:'test-key',CONTRACT_AI_BASE_URL:'https://model.test'},outboundService:async()=>Response.json({choices:[{message:{content:JSON.stringify(content)}}]})}]});
+const mf=new Miniflare({workers:[{name:"contract",modules:true,scriptPath:'dist/server/index.js',compatibilityDate:'2026-08-01',compatibilityFlags:['nodejs_compat'],d1Databases:['DB'],r2Buckets:['BUCKET'],bindings:{CONTRACT_BOOTSTRAP_SECRET:bootstrap,CONTRACT_BOOTSTRAP_ADMIN_EMAIL:'admin@test.local',CONTRACT_BOOTSTRAP_ADMIN_HASH:adminHash,CONTRACT_AI_API_KEY:'test-key',CONTRACT_AI_BASE_URL:'https://model.test'},outboundService:async()=>Response.json({choices:[{message:{content:JSON.stringify(content)}}]})}]});
 const results=[];const pass=s=>{results.push(s);console.log('PASS',s)};
 const actor=()=>({cookie:''});const admin=actor(),client=actor(),lawyer=actor(),other=actor();
 async function req(a,path,body,expected=200,method,headers={}){
@@ -15,9 +17,11 @@ async function req(a,path,body,expected=200,method,headers={}){
 }
 try{
  const db=await mf.getD1Database('DB');for(const f of(await readdir('drizzle')).filter(f=>f.endsWith('.sql')).sort()){const sql=await readFile('drizzle/'+f,'utf8');await db.batch(sql.split('--> statement-breakpoint').filter(x=>x.trim()).map(s=>db.prepare(s)));}
- const password=randomBytes(20).toString('hex');
- await req(admin,'auth/bootstrap',{name:'管理员',email:'admin@test.local',password},201,undefined,{'x-contract-bootstrap':bootstrap});
- await req(admin,'auth/bootstrap',{name:'二次管理员',email:'admin2@test.local',password},409,undefined,{'x-contract-bootstrap':bootstrap});pass('bootstrap is secret-protected and single-use');
+
+ await req(client,'auth/register',{name:'冒领管理员',email:'admin@test.local',password},409);
+ await req(admin,'auth/login',{email:'admin@test.local',password:'wrong-password'},401);
+ await req(admin,'auth/login',{email:'admin@test.local',password});
+ await req(admin,'auth/bootstrap',{name:'二次管理员',email:'admin2@test.local',password},409,undefined,{'x-contract-bootstrap':bootstrap});pass('administrator first login is credential-bound, reserved, and single-use');
  await req(admin,'auth/login',{email:'admin@test.local',password});const lawyerUser=await req(admin,'users',{name:'律师',email:'lawyer@test.local',password,role:'lawyer'},201);
  await req(lawyer,'auth/login',{email:'lawyer@test.local',password});await req(client,'auth/register',{name:'客户',email:'client@test.local',password,role:'admin'},201);await req(other,'auth/register',{name:'其他客户',email:'other@test.local',password},201);assert.equal((await req(client,'session')).role,'client');await req(client,'users',undefined,403);pass('roles and registration privilege boundaries');
  let c=await req(client,'contracts',{title:'云端测试'},201);await req(other,`contracts/${c.id}`,undefined,404);await req(lawyer,`contracts/${c.id}`,undefined,404);pass('contract ownership isolation');

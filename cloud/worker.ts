@@ -33,10 +33,16 @@ async function api(request:Request,env:Env):Promise<Response>{
    if(!env.CONTRACT_BOOTSTRAP_SECRET||!secret||await digest(secret)!==await digest(env.CONTRACT_BOOTSTRAP_SECRET))throw new AppError(403,'无权初始化。','FORBIDDEN');
    const created=await createUser(env,input,'admin',true);return json(created,201);
   }
-  if(p[1]==='register'){const created=await createUser(env,input);return json(created,201,{'Set-Cookie':sessionCookie(await issueSession(env,created),request)});}
+  if(p[1]==='register'){if(email===env.CONTRACT_BOOTSTRAP_ADMIN_EMAIL)throw new AppError(409,'此邮箱为平台管理员保留，请直接登录。','EMAIL_EXISTS');const created=await createUser(env,input);return json(created,201,{'Set-Cookie':sessionCookie(await issueSession(env,created),request)});}
   if(p[1]==='login'){
    const v=z.object({email:z.string().email(),password:z.string().min(1).max(256)}).parse({...input,email});
-   const found=await env.DB.prepare('SELECT * FROM users WHERE email=?').bind(v.email).first<any>();
+   let found=await env.DB.prepare('SELECT * FROM users WHERE email=?').bind(v.email).first<any>();
+   // A preconfigured administrator may complete one-time setup through ordinary
+   // sign-in. No public first-registrant or client-supplied role can claim it.
+   if(!found&&v.email===env.CONTRACT_BOOTSTRAP_ADMIN_EMAIL&&env.CONTRACT_BOOTSTRAP_ADMIN_HASH&&await verifyPassword(v.password,env.CONTRACT_BOOTSTRAP_ADMIN_HASH)){
+    try{await createUser(env,{...v,name:'平台管理员'},'admin',true);}catch(error){if(!(error instanceof AppError&&error.status===409))throw error;}
+    found=await env.DB.prepare('SELECT * FROM users WHERE email=?').bind(v.email).first<any>();
+   }
    if(!found||found.disabled||!await verifyPassword(v.password,found.password_hash))throw new AppError(401,'邮箱或密码不正确。','INVALID_CREDENTIALS');
    const logged=publicUser(found);return json(logged,200,{'Set-Cookie':sessionCookie(await issueSession(env,logged),request)});
   }

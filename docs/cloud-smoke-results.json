@@ -1,8 +1,8 @@
 {
   "result": "passed",
-  "time": "2026-09-20T03:50:38.931Z",
+  "time": "2026-09-20T03:59:14.108Z",
   "checks": [
-    "bootstrap is secret-protected and single-use",
+    "administrator first login is credential-bound, reserved, and single-use",
     "roles and registration privilege boundaries",
     "contract ownership isolation",
     "model response produces real private DOCX in R2",

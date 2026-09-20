@@ -329,3 +329,11 @@ test('OnlyOffice download URL checks block SSRF and redirect escape', async () =
     else env.NODE_ENV = previousNodeEnv;
   }
 });
+
+test('blank lines inside complete attachments remain blank instead of inserting missing information', async () => {
+  const content = contentFixture();
+  content.attachments![0].content += '\n\n补充交付说明：按照已确认清单交付。';
+  const text = extractDocxText(await renderContract(content));
+  assert.ok(text.includes('补充交付说明'));
+  assert.ok(!text.includes('[待补充]'));
+});

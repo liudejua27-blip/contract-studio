@@ -321,7 +321,7 @@ function textRun(text: string, options: { bold?: boolean; size?: number; font?: 
 function paragraphLines(value: string | undefined | null, options: { indent?: number; spacingAfter?: number } = {}): Paragraph[] {
   const text = missingValue(value);
   return text.split(/\r?\n/).map((line) => new Paragraph({
-    children: [textRun(line || '[待补充]')],
+    children: [textRun(line)],
     indent: options.indent ? { firstLine: options.indent } : undefined,
     spacing: { after: options.spacingAfter ?? 140, line: 320 },
   }));

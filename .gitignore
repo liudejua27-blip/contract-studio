@@ -1,0 +1,16 @@
+node_modules/
+.next/
+.env*
+!.env.example
+.data/
+*.tsbuildinfo
+playwright-report/
+test-results/
+
+.next-build/
+
+dist/
+.wrangler/
+.sites-runtime/
+.dev.vars
+.DS_Store

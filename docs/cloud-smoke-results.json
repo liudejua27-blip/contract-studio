@@ -1,0 +1,18 @@
+{
+  "result": "passed",
+  "time": "2026-09-20T03:50:38.931Z",
+  "checks": [
+    "bootstrap is secret-protected and single-use",
+    "roles and registration privilege boundaries",
+    "contract ownership isolation",
+    "model response produces real private DOCX in R2",
+    "review freezes draft and rejects duplicate review",
+    "assignment and supplement roundtrip",
+    "upload validation and immutable confirmed delivery",
+    "client receives exact lawyer upload",
+    "lawyer cannot see client post-delivery draft",
+    "concurrent submissions commit only one review",
+    "disabled account session is revoked",
+    "CSRF and logout"
+  ]
+}

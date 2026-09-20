@@ -1,0 +1,59 @@
+name: contract-studio
+
+services:
+  # Optional isolated database. It deliberately uses 55432 so the existing
+  # host PostgreSQL on 5432 is never replaced or reconfigured.
+  postgres:
+    profiles: [infra]
+    image: ${POSTGRES_IMAGE:-postgres:16-alpine}
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-contract_studio}
+      POSTGRES_USER: ${POSTGRES_USER:-contract_studio}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-replace-with-local-password}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-55432}:5432"
+    volumes:
+      - contract-studio-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  # Optional S3-compatible storage for local development. The profile is
+  # intentionally separate so it can be started without PostgreSQL.
+  minio:
+    profiles: [infra]
+    # The Docker Hub tag was unavailable during the 2026-09-18 check; this
+    # digest is the multi-arch manifest currently served by Quay's latest tag.
+    image: ${MINIO_IMAGE:-quay.io/minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e}
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-contract_studio_minio}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-replace-with-local-password}
+    ports:
+      - "127.0.0.1:${MINIO_API_PORT:-59000}:9000"
+      - "127.0.0.1:${MINIO_CONSOLE_PORT:-59001}:9001"
+    volumes:
+      - contract-studio-minio:/data
+
+  # Optional isolated ONLYOFFICE service. The already-running host service is
+  # on 8081; this profile uses 8082 to avoid a port collision.
+  onlyoffice:
+    profiles: [onlyoffice]
+    image: ${ONLYOFFICE_IMAGE:-onlyoffice/documentserver:9.3.1.2}
+    environment:
+      JWT_ENABLED: ${ONLYOFFICE_JWT_ENABLED:-true}
+      JWT_SECRET: ${ONLYOFFICE_JWT_SECRET:-replace-with-local-secret}
+      JWT_HEADER: ${ONLYOFFICE_JWT_HEADER:-Authorization}
+    ports:
+      - "127.0.0.1:${ONLYOFFICE_COMPOSE_PORT:-8082}:80"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost/healthcheck || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+
+volumes:
+  contract-studio-pgdata:
+  contract-studio-minio:

@@ -1,0 +1,12 @@
+{
+  "time": "2026-09-20T03:36:59.540Z",
+  "checks": [
+    "authenticated live model generates persisted AI version",
+    "download matches persisted SHA-256",
+    "review freezes exact live-generated version"
+  ],
+  "contractId": "606b0dfd-5752-4d0c-8e19-d7f4b150550e",
+  "generationMs": 29045,
+  "versionId": "4c17e590-8b86-4838-9341-b0a7b6854460",
+  "result": "passed"
+}

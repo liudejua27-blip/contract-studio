@@ -1,0 +1,22 @@
+{
+  "time": "2026-09-20T03:37:34.518Z",
+  "checks": [
+    "three roles authenticate with persisted sessions",
+    "registration cannot self-elevate",
+    "unassigned lawyer and unrelated client cannot read contract",
+    "explicit demo produces a downloadable real DOCX with matching hash",
+    "document download enforces owner access",
+    "review submission freezes exact draft and prevents duplicate open task",
+    "only admin assigns and assigned lawyer starts task",
+    "supplement request and reply roundtrip changes task state",
+    "fake DOCX rejected",
+    "delivery uses exact saved lawyer file and preserves original",
+    "post-delivery generation creates unreviewed new draft without replacing final",
+    "logout revokes session"
+  ],
+  "liveAI": "not configured / not exercised",
+  "onlyoffice": "separate browser acceptance required",
+  "contractId": "6b7dd817-032c-4341-a968-3e657d4b4acb",
+  "reviewId": "ad67ebb0-dee2-41a6-9f9c-c64d6301587b",
+  "result": "passed"
+}

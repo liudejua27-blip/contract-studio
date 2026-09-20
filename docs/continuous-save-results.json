@@ -1,0 +1,42 @@
+{
+  "time": "2026-09-19T09:26:58.132Z",
+  "contractId": "61cfe8d3-ee19-4de6-819a-25bc01a1799e",
+  "actualBrowserEdits": true,
+  "versions": [
+    {
+      "id": "499a7a21-71d2-4370-99bc-4e732adf8df4",
+      "number": 1,
+      "hashMatches": true,
+      "second": false,
+      "third": false
+    },
+    {
+      "id": "87f035ca-cded-4e0e-9387-bf22b1b2f635",
+      "number": 2,
+      "hashMatches": true,
+      "second": false,
+      "third": false
+    },
+    {
+      "id": "1368a7ca-61c6-44be-a0ad-02289ee38ee3",
+      "number": 3,
+      "hashMatches": true,
+      "second": false,
+      "third": false
+    },
+    {
+      "id": "487ca7e4-4f67-4960-b5bf-01968035c315",
+      "number": 4,
+      "hashMatches": true,
+      "second": true,
+      "third": false
+    },
+    {
+      "id": "7e061421-f15f-43d4-9462-efdb3417eb0e",
+      "number": 5,
+      "hashMatches": true,
+      "second": true,
+      "third": true
+    }
+  ]
+}

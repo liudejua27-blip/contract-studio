@@ -376,7 +376,8 @@ test('an AI chat that started before review submission is rejected when its tran
   const release = new Promise<void>((resolve) => { resolveRelease = resolve; });
   process.env.CONTRACT_AI_API_KEY = 'concurrency-test-key';
   process.env.CONTRACT_AI_BASE_URL = 'http://concurrency-test.invalid/v1';
-  globalThis.fetch = async () => {
+  globalThis.fetch = async (_url,init) => {
+    if(String(init?.body).includes('CONTRACT_ROUTER_V1'))return Response.json({choices:[{message:{content:JSON.stringify({templateId:null,action:'answer',reason:'测试对话',facts:[]})}}]});
     resolveStarted();
     await release;
     return Response.json({ choices: [{ message: { content: '并发审核已开始，不能再写入起草消息。' } }] });

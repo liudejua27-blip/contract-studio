@@ -8,10 +8,10 @@ test('live malformed output fails closed and current lawyer document enters rewr
  const oldFetch=globalThis.fetch,oldKey=process.env.CONTRACT_AI_API_KEY;process.env.CONTRACT_AI_API_KEY='test-only-not-a-real-key';let requestBody='';
  try{
  globalThis.fetch=async(_url,init)=>{requestBody=String(init?.body);return Response.json({choices:[{message:{content:'not valid contract JSON'}}]})};
- await assert.rejects(generateContractReply({mode:'live',generate:true,prompt:'修改付款节点',title:'合同',messages:[],existingDocumentText:'律师修改：付款前必须验收。'}),/valid contract/);
+ await assert.rejects(generateContractReply({mode:'live',templateId:'software',generate:true,prompt:'修改付款节点',title:'合同',messages:[],existingDocumentText:'律师修改：付款前必须验收。'}),/valid contract/);
  assert.ok(requestBody.includes('律师修改：付款前必须验收。'));
  globalThis.fetch=async()=>Response.json({choices:[{message:{content:JSON.stringify(content)}}]});
- const r=await generateContractReply({mode:'live',generate:true,prompt:'费用8万元',title:'合同',messages:[]});assert.equal(r.source,'ai');assert.equal(r.content?.title,content.title);assert.ok(!r.reply.includes('"sections"'));
+ const r=await generateContractReply({mode:'live',templateId:'software',generate:true,prompt:'费用8万元',title:'合同',messages:[]});assert.equal(r.source,'ai');assert.equal(r.content?.title,content.title);assert.ok(!r.reply.includes('"sections"'));
  }finally{globalThis.fetch=oldFetch;if(oldKey===undefined)delete process.env.CONTRACT_AI_API_KEY;else process.env.CONTRACT_AI_API_KEY=oldKey;}
 });
 
@@ -21,7 +21,7 @@ test('generation requests JSON and refuses token-truncated output even when JSON
  try {
   let body: Record<string,unknown>={};
   globalThis.fetch=async(_url,init)=>{body=JSON.parse(String(init?.body));return Response.json({choices:[{finish_reason:'length',message:{content:JSON.stringify(content)}}]})};
-  await assert.rejects(generateContractReply({mode:'live',generate:true,prompt:'费用8万元',title:'合同',messages:[]}), (error:unknown)=>(error as {code?:string}).code==='AI_OUTPUT_TRUNCATED');
+  await assert.rejects(generateContractReply({mode:'live',templateId:'software',generate:true,prompt:'费用8万元',title:'合同',messages:[]}), (error:unknown)=>(error as {code?:string}).code==='AI_OUTPUT_TRUNCATED');
   assert.deepEqual(body.response_format,{type:'json_object'});
  } finally {globalThis.fetch=oldFetch;if(oldKey===undefined)delete process.env.CONTRACT_AI_API_KEY;else process.env.CONTRACT_AI_API_KEY=oldKey;}
 });

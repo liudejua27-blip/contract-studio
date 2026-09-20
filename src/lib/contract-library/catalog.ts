@@ -1,6 +1,6 @@
 /** Original Chinese drafting playbooks. Structure informed by attributed sources;
  * no foreign governing law, commercial defaults or enforceability conclusions imported. */
-export const LIBRARY_VERSION = '2026.09.20.1';
+export const LIBRARY_VERSION = '2026.09.20.2';
 export const SOURCES = {
  civil: {name:'中华人民共和国民法典（市场监管总局）',url:'https://www.samr.gov.cn/zw/zfxxgk/fdzdgknr/bgt/art/2023/art_60fb3863b7364b759123a42d1df568ca.html',license:'法律原文；本库独立整理',version:'2020年通过，2021年施行；2026-09-20查阅',use:'国内合同内容与分类参考，不代表穷尽现行法律'},
  official: {name:'国家市场监督管理总局合同示范文本库',url:'https://htsfwb.samr.gov.cn/',license:'官方公开查阅、下载、使用；本库仅链接',version:'2026-09-20查阅',use:'供律师进一步选择地区、行业示范文本；未批量导入'},

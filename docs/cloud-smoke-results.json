@@ -1,12 +1,12 @@
 {
   "result": "passed",
-  "time": "2026-09-20T04:27:38.024Z",
+  "time": "2026-09-20T04:40:36.008Z",
   "checks": [
     "administrator first login is credential-bound, reserved, and single-use",
     "roles and registration privilege boundaries",
     "template downloads require login and reject unknown template",
     "contract ownership isolation",
-    "model response produces real private DOCX in R2",
+    "natural description auto-selects template and persists Word without generate flag",
     "review freezes draft and rejects duplicate review",
     "assignment and supplement roundtrip",
     "upload validation and immutable confirmed delivery",

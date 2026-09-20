@@ -363,7 +363,7 @@ export async function chatContract(actor: AuthContext['user'], contractId: strin
   let versionId: string | null = null;
   let fileKey: string | null = null;
   let sha256: string | null = null;
-  if (parsed.generate && generated.content) {
+  if (generated.content) {
     versionId = randomUUID();
     fileKey = `contracts/${contractId}/versions/${versionId}.docx`;
     sha256 = await renderAndStore(generated.content, fileKey);

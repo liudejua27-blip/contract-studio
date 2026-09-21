@@ -1,4 +1,3 @@
-import {consumeAgentJob,reconcileAgentJobs,wakeAgent,type AgentJobMessage} from './agent-jobs';
 import {templateDownload} from '../src/server/template-download';
 import {z,ZodError} from 'zod';
 import {AppError} from './error';
@@ -22,7 +21,7 @@ async function api(request:Request,env:Env):Promise<Response>{
   if(upload)bounded=new Request(request.url,{method,headers:request.headers,body:bytes});
   else if(bytes.length){try{input=JSON.parse(new TextDecoder().decode(bytes));}catch{throw new AppError(400,'输入格式无效。','INVALID_INPUT');}if(!input||typeof input!=='object'||Array.isArray(input))throw new AppError(400,'输入格式无效。','INVALID_INPUT');}
  }
- if(p.join('/')==='capabilities'&&method==='GET')return json({aiConfigured:!!env.CONTRACT_AI_API_KEY,demoEnabled:false,onlyofficeConfigured:false,storage:'r2',backgroundJobs:!!env.AGENT_QUEUE});
+ if(p.join('/')==='capabilities'&&method==='GET')return json({aiConfigured:!!env.CONTRACT_AI_API_KEY,demoEnabled:false,onlyofficeConfigured:false,storage:'r2'});
  const user=await currentUser(env,request);
  if(p.join('/')==='session'&&method==='GET')return json(user);
  if(p[0]==='auth'&&method==='POST'){
@@ -74,8 +73,8 @@ async function api(request:Request,env:Env):Promise<Response>{
   if(p.length===1&&method==='GET')return json(await contracts.list(env,user));
   if(p.length===1&&method==='POST')return json(await contracts.create(env,user,input),201);
   if(p.length===2&&method==='GET')return json(contracts.view((await contracts.load(env,p[1],user)).contract,user));
-  if(p.length===5&&p[2]==='jobs'&&['run','retry','cancel'].includes(p[4])&&method==='POST'){const c=await contracts.jobAction(env,user,p[1],p[3],p[4] as 'run'|'retry'|'cancel');await wakeAgent(env,c);return json(c);}
-  if(p.length===3&&p[2]==='chat'&&method==='POST'){const c=await contracts.chat(env,user,p[1],input);await wakeAgent(env,c);return json(c);}
+  if(p.length===5&&p[2]==='jobs'&&['run','retry','cancel'].includes(p[4])&&method==='POST'){const c=await contracts.jobAction(env,user,p[1],p[3],p[4] as 'run'|'retry'|'cancel');return json(c);}
+  if(p.length===3&&p[2]==='chat'&&method==='POST'){const c=await contracts.chat(env,user,p[1],input);return json(c);}
   if(p.length===3&&p[2]==='reviews'&&method==='POST')return json(await contracts.submit(env,user,p[1],input),201);
   if(p.length===5&&p[2]==='reviews'&&method==='POST'){
    if(p[4]==='upload'){const file=(await bounded!.formData()).get('file');if(!file||typeof file==='string')throw new AppError(400,'请选择 DOCX 文件。','FILE_REQUIRED');return json(await contracts.upload(env,user,p[1],p[3],file));}
@@ -85,10 +84,6 @@ async function api(request:Request,env:Env):Promise<Response>{
  throw new AppError(404,'接口不存在。','NOT_FOUND');
 }
 export default {
- async queue(batch:MessageBatch<AgentJobMessage>,env:Env){
-  for(const message of batch.messages){try{await consumeAgentJob(env,message.body);message.ack();}catch{message.retry({delaySeconds:30});}}
- },
- async scheduled(_event:ScheduledController,env:Env){await reconcileAgentJobs(env);},
  async fetch(request:Request,env:Env):Promise<Response>{
   try{
    if(new URL(request.url).pathname.startsWith('/api/'))return await api(request,env);

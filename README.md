@@ -31,7 +31,7 @@ npm run dev
 
 Pi Agent Core 在服务端负责有限次数的工具循环，沿用 OpenAI-compatible Chat Completions 接口和现有 DeepSeek 配置：`CONTRACT_AI_BASE_URL`、`CONTRACT_AI_MODEL`、`CONTRACT_AI_API_KEY`。交易事实、系统默认条款和律师待审事项分别保存。模型失败或结构不合法时不会降级为“成功合同”。
 
-Cloudflare 版本支持 Worker + D1 + R2；绑定 `AGENT_QUEUE` 后由队列推进生成任务，定时任务修复遗漏的唤醒。未绑定队列时保留现有前台推进方式。队列部署要求与本地验收证据见 [Pi 改造说明](docs/PI-AGENT-CORE-2026-09-21.md)。
+部署仅使用 Sites；保留其托管运行环境及数据库、文件存储适配。生成任务持久化保存，由页面逐阶段推进，刷新可恢复，失败可重试。生成期间请保持页面打开，不承诺关闭页面后继续运行。
 
 本地开发可设置 `CONTRACT_DEMO_MODE=true`，再由用户显式勾选“示例体验”。示例使用固定结构和需求原文，不调用模型，版本 source 标记为 `demo`，仅供技术流程验收。生产环境禁用该模式。
 

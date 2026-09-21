@@ -7,7 +7,7 @@ export interface Version { reviewId?:string; text?:string; id: string; number: n
 export interface ReviewMessage { id: string; authorId: string; authorName: string; content: string; createdAt: string }
 export interface Review { handoffVersionId?:string; id: string; submittedVersionId: string | null; lawyerId: string | null; lawyerName?: string; status: 'waiting' | 'reviewing' | 'need_info' | 'completed'; stance: string; concerns: string; requirements: string; submittedAt: string; completedAt?: string; finalVersionId?: string; deliveryNote?: string; messages: ReviewMessage[]; editingVersionId?: string; saveStatus?: 'saved' | 'pending' | 'error' }
 export interface Contract { workflow?: Workflow; id: string; ownerId: string; ownerName: string; title: string; createdAt: string; updatedAt: string; messages: Message[]; versions: Version[]; reviews: Review[] }
-export interface Capabilities { backgroundJobs?:boolean;  aiConfigured: boolean; demoEnabled: boolean; onlyofficeConfigured: boolean; storage: string }
+export interface Capabilities { aiConfigured: boolean; demoEnabled: boolean; onlyofficeConfigured: boolean; storage: string }
 
 export interface IntakeFact { source?:"user"|"accepted_proposal"; proposalId?:string;  value:string; quote:string; evidence?:string[] }
 export interface Intake { deferredFields?:string[]; businessProposals?:{id:string;fieldId:string;value:string}[];  policyVersion?:string; defaults?:Record<string,string>; reviewNotes?:string[]; withdrawnFields?:string[]; agentTrace?:{runtime:"pi-core";turns:number;tools:string[]};  suggestions?:Record<string,string>; inputRevision?:number; templateId:string; facts:Record<string,IntakeFact>; missing:string[]; conflicts:string[]; summaryId:string; confirmedAt?:string }

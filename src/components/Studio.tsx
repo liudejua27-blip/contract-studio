@@ -37,9 +37,9 @@ export function Studio(){
  function nav(next:string){setPageNumber(1);setQuery('');setInput('');setPage(next);setSelected(null);setError('');setMobileNav(false)}
  const taskBusy=!!contract&&['pending','running'].includes(contract.workflow?.job?.status||'');
  useEffect(()=>{if(!contract||user?.role!=='client')return;const id=contract.id;let stopped=false;
- const pump=async()=>{try{const c=await api<Contract>(`contracts/${id}`);if(stopped)return;onUpdate(c);const j=c.workflow?.job;if(!caps.backgroundJobs&&j&&(j.status==='pending'||j.status==='running'&&Date.parse(j.leaseUntil||'')<=Date.now())&&!running.current.has(j.id)){running.current.add(j.id);void api<Contract>(`contracts/${id}/jobs/${j.id}/run`,{}).then(onUpdate).catch(e=>setError(e.message)).finally(()=>running.current.delete(j.id));}}catch(e){if(!stopped)setError((e as Error).message)}};
+ const pump=async()=>{try{const c=await api<Contract>(`contracts/${id}`);if(stopped)return;onUpdate(c);const j=c.workflow?.job;if(j&&(j.status==='pending'||j.status==='running'&&Date.parse(j.leaseUntil||'')<=Date.now())&&!running.current.has(j.id)){running.current.add(j.id);void api<Contract>(`contracts/${id}/jobs/${j.id}/run`,{}).then(onUpdate).catch(e=>setError(e.message)).finally(()=>running.current.delete(j.id));}}catch(e){if(!stopped)setError((e as Error).message)}};
  void pump();const timer=setInterval(()=>void pump(),taskBusy?2500:20000);return()=>{stopped=true;clearInterval(timer)};
- },[contract?.id,user?.role,onUpdate,taskBusy,caps.backgroundJobs]);
+ },[contract?.id,user?.role,onUpdate,taskBusy]);
  async function send(message:string,_generate=false,confirmId?:string){setBusy(true);setError('');try{let c=contract;if(!c){c=await api<Contract>('contracts',{});onUpdate(c);setSelected(c.id);setPage('contract')}
  const key='contract-pending-'+c.id;let pending:{requestId:string;message:string;confirmId?:string}|undefined;try{pending=JSON.parse(localStorage.getItem(key)||'null')}catch{}
  if(!pending||pending.message!==message||pending.confirmId!==confirmId)pending={requestId:crypto.randomUUID(),message,...(confirmId?{confirmId}:{})};localStorage.setItem(key,JSON.stringify(pending));

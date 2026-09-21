@@ -5,7 +5,7 @@ export const LIBRARY_VERSION = PLAYBOOK_VERSION;
 export const SOURCES = {
  civil: {name:'中华人民共和国民法典（市场监管总局）',url:'https://www.samr.gov.cn/zw/zfxxgk/fdzdgknr/bgt/art/2023/art_60fb3863b7364b759123a42d1df568ca.html',license:'法律原文；本库独立整理',version:'2020年通过，2021年施行；2026-09-20查阅',use:'国内合同内容与分类参考，不代表穷尽现行法律'},
  official: {name:'国家市场监督管理总局合同示范文本库',url:'https://htsfwb.samr.gov.cn/',license:'官方公开查阅、下载、使用；本库仅链接',version:'2026-09-20查阅',use:'供律师进一步选择地区、行业示范文本；未批量导入'},
- skill: {name:'Christopher Sheehan · Contract Review Skill',url:'https://github.com/evolsb/claude-legal-skill/blob/bca0d2e9d5ec81298ddfbfde78fa4f38fb4589b0/skill.md',license:'MIT',version:'bca0d2e9d5ec81298ddfbfde78fa4f38fb4589b0 / 3.0.0',use:'参考分类、立场、原文证据、缺项检查方法；不采用美国法及市场参数'},
+ skill: {name:'Legal Skills Contributors · 中国合同起草与审查',url:'https://github.com/pa1nrui1/legal-skills/tree/5e39b9c30cc66ece89ff64cdafbeddde80c6b507',license:'MIT',version:'5e39b9c30cc66ece89ff64cdafbeddde80c6b507',use:'接入合同起草、合同审查及通用/专项参考；平台适配，不等于现行法规已核验'},
  nda: {name:'Bonterms Mutual NDA v1.0',url:'https://github.com/Bonterms/Mutual-NDA/blob/1b6e3a67176d47bbb89633bd4ec2be2c32d6cacf/Mutual-NDA.md',license:'CC BY 4.0 · https://creativecommons.org/licenses/by/4.0/',version:'1b6e3a67176d47bbb89633bd4ec2be2c32d6cacf',use:'参考保密范围、例外、允许披露及返还销毁的组织方式；中文内容经改写，非原版或官方译本'},
  cloud: {name:'Bonterms Cloud Terms v1.0',url:'https://github.com/Bonterms/Cloud-Terms/blob/df13f512c3bd923cc09cc2dae918812f876ea6e9/Cloud-Terms.md',license:'CC BY 4.0 · https://creativecommons.org/licenses/by/4.0/',version:'df13f512c3bd923cc09cc2dae918812f876ea6e9',use:'参考服务、数据、退出与附件结构；不继承可用率、费率、期限或外国法'},
  services: {name:'Bonterms Professional Services Agreement v1.1',url:'https://github.com/Bonterms/Professional-Services-Agreement/blob/a31fc2a697900e32a0105a6eb469cb4def067e31/Professional-Services-Agreement%20V1.1.md',license:'CC BY 4.0 · https://creativecommons.org/licenses/by/4.0/',version:'a31fc2a697900e32a0105a6eb469cb4def067e31',use:'参考工作说明书、变更、验收与成果权利结构；独立改写，不采用美国雇佣作品规则'},
@@ -121,4 +121,5 @@ export const CONTRACT_TEMPLATES:ContractTemplate[]=[
  ['settlement','费用、财产移交与终止','事务费用和报酬分别列明。取得财产、资料和凭证的移交及终止清算安排：[待补充]。','费用','移交']]),risks([
  ['authority','全权委托过宽','审查签约、收款、处分财产等权限是否具体且有边界。','全权','不可撤销'],['fee','报酬与费用混淆','区分办事费用、服务报酬、垫款与未完成时结算，不默认固定成功费。','报酬','成功费'] ])),
 ];
-export const getTemplate=(id?:string)=>CONTRACT_TEMPLATES.find(t=>t.id===id);
+export const GENERAL_TEMPLATE=make('general','交易合作协议','通用起草','按实际交易选择条款，专项规则可选。',[],'通用起草框架，具体法律关系及条款由律师审核',['official'],[],[],[],false);
+export const getTemplate=(id?:string)=>id==='general'?GENERAL_TEMPLATE:CONTRACT_TEMPLATES.find(t=>t.id===id);

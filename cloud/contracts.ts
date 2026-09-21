@@ -45,7 +45,7 @@ export function workflowStore(env:Env,u:User,id:string):WorkflowStore{return{
  environment:{CONTRACT_AI_API_KEY:env.CONTRACT_AI_API_KEY,CONTRACT_AI_BASE_URL:env.CONTRACT_AI_BASE_URL||'https://api.deepseek.com',CONTRACT_AI_MODEL:env.CONTRACT_AI_MODEL||'deepseek-v4-pro',CONTRACT_AI_TIMEOUT_MS:env.CONTRACT_AI_TIMEOUT_MS}
 };}
 export async function chat(env:Env,u:User,id:string,input:unknown){return startWorkflow(workflowStore(env,u,id),u,input);}
-export async function jobAction(env:Env,u:User,id:string,jobId:string,action:'run'|'retry'|'cancel'){return controlWorkflow(workflowStore(env,u,id),u,jobId,action);}
+export async function jobAction(env:Env,u:User,id:string,jobId:string,action:'run'|'retry'|'cancel',onEvent?:import('../src/lib/agent-stream').AgentEventSink){return controlWorkflow({...workflowStore(env,u,id),onEvent},u,jobId,action);}
 export async function submit(env:Env,u:User,id:string,input:unknown){
  const v=z.object({versionId:z.string().uuid().optional(),consultation:z.boolean().default(false),lawyerId:z.string().uuid().optional(),stance:z.string().trim().min(1).max(100),concerns:z.string().trim().max(3000).default('')}).parse(input);
  const {row,contract:c}=await load(env,id,u);if(c.ownerId!==u.id||u.role!=='client')fail('FORBIDDEN','仅合同所有者可送审。',403);

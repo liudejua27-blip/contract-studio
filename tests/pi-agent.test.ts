@@ -63,7 +63,7 @@ test('extraction cannot add non-numeric obligations, and lawyer notes survive su
  const old=fetch;const i=intakeFixture();i.reviewNotes=['排他使用需律师复核'];
  try{globalThis.fetch=async()=>call('update_contract_spec',{result:{templateId:'software',facts:[{fieldId:'scope',value:'开发网站并提供终身免费维护',quote:'做一个网站'}]}});
  const r=await collectIntake([{id:'m',role:'user',content:'做一个网站',createdAt:''}],i,env);
- assert.equal(r.intake!.facts.scope.value,'做一个网站');assert.deepEqual(r.intake!.reviewNotes,['排他使用需律师复核']);
+ assert.equal(r.intake!.facts.scope.value,'做一个网站');assert.ok(r.intake!.reviewNotes!.includes('排他使用需律师复核'));assert.ok(r.intake!.reviewNotes!.some(n=>n.includes('未进行外部核验')));
  }finally{globalThis.fetch=old}
 });
 test('material scene questions are asked, then deferred without repeatedly asking or inventing arrangements',async()=>{

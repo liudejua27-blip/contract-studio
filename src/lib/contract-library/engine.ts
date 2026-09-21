@@ -16,7 +16,7 @@ export function resolveTemplate(messages:Message[],prompt:string,explicit?:strin
 }
 export type LocatedFact={fieldId:string;quote:string};
 export function templatePrompt(template:ContractTemplate|undefined,selection:DraftingReport['selection']){
- if(!template)return '当前类型尚未覆盖，先澄清合作，不输出合同。';
+ if(!template)return '没有专项模板，先理解双方交易与关键约定，使用通用框架独立起草，不编造事实。';
  return `模板${template.name}，${template.version}，待律师审定。必要信息：${template.fields.map(f=>f.question).join('；')}。先补齐、核对冲突，并由用户确认关键约定后再生成。未确认事实不得自行决定；正文不得含占位符、内部检查、来源或起草说明。`;
 }
 export function inspectDraft(content:ContractContent,template:ContractTemplate,reference:string,selection:DraftingReport['selection'],locatedFacts:LocatedFact[]=[]):DraftingReport{

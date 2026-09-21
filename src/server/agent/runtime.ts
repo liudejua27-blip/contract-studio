@@ -1,3 +1,6 @@
+import {readModelResponse} from './model-stream';
+import {legalSkillIndex,readLegalSkill} from './legal-skills';
+import type {AgentEventSink} from '../../lib/agent-stream';
 import type {AgentTool, StreamFn} from '@earendil-works/pi-agent-core';
 import type {AssistantMessage, Model, JsonObject} from '@earendil-works/pi-ai';
 import type {ZodType} from 'zod';
@@ -13,9 +16,9 @@ function parse(text:string):unknown {
  try{return JSON.parse(clean)}catch{throw new AgentFailure('AI_INVALID_ROUTING','模型返回的内容不完整，请重试。');}
 }
 
-/** Text-only, non-streaming OpenAI-compatible transport. Pi owns the tool loop.
+/** OpenAI-compatible streaming transport with public preview projection. Pi owns the tool loop.
  * Never forwards provider errors, reasoning content, credentials, or raw traces to the UI. */
-function transport(env:Environment, deadline:number):StreamFn {
+function transport(env:Environment, deadline:number,stage:'intake'|'draft'|'verify',emit?:AgentEventSink):StreamFn {
  return async (model,context,options)=>{
   const {createAssistantMessageEventStream}=await import('@earendil-works/pi-ai/utils/event-stream');
   const {getCurrentSystemPrompt,resolveTranscriptTools}=await import('@earendil-works/pi-ai/utils/transcript');
@@ -39,9 +42,9 @@ function transport(env:Environment, deadline:number):StreamFn {
      const remaining=deadline-Date.now();if(remaining<=0)throw new AgentFailure('AI_TIMEOUT','本次处理超时，信息已保存，请重试。');
      try{
       const signal=AbortSignal.any([AbortSignal.timeout(remaining),...(options?.signal?[options.signal]:[])]);
-      const response=await fetch(model.baseUrl+'/chat/completions',{method:'POST',signal,headers:{'content-type':'application/json',authorization:'Bearer '+(env.CONTRACT_AI_API_KEY||env.OPENAI_API_KEY)},body:JSON.stringify({model:model.id,messages,stream:false,temperature:0.2,max_tokens:8000,...(new URL(model.baseUrl).hostname==='api.deepseek.com'?{thinking:{type:'disabled'}}:{}),tools:tools.map(t=>({type:'function',function:{name:t.name,description:t.description,parameters:t.parameters}})),tool_choice:'auto'})});
+      const response=await fetch(model.baseUrl+'/chat/completions',{method:'POST',signal,headers:{'content-type':'application/json',authorization:'Bearer '+(env.CONTRACT_AI_API_KEY||env.OPENAI_API_KEY)},body:JSON.stringify({model:model.id,messages,stream:true,temperature:0.2,max_tokens:8000,...(new URL(model.baseUrl).hostname==='api.deepseek.com'?{thinking:{type:'disabled'}}:{}),tools:tools.map(t=>({type:'function',function:{name:t.name,description:t.description,parameters:t.parameters}})),tool_choice:'auto'})});
       if(!response.ok){console.warn(JSON.stringify({event:'pi_provider_error',status:response.status}));throw new AgentFailure('AI_PROVIDER_ERROR','模型服务暂时未能处理，请重试。');}
-      payload=await response.json();const choice=payload.choices?.[0];
+      payload=await readModelResponse(response,stage,emit);const choice=payload.choices?.[0];
       if(choice?.finish_reason==='length')throw new AgentFailure('AI_OUTPUT_TRUNCATED','模型输出不完整，未保存新版本。');
       if(!choice?.message?.content?.trim()&&!choice?.message?.tool_calls?.length)throw new AgentFailure('AI_EMPTY_RESPONSE','模型未返回有效内容，信息已保存。');
       break;
@@ -64,7 +67,7 @@ function transport(env:Environment, deadline:number):StreamFn {
  };
 }
 
-export async function runStructuredAgent<T>(input:{prompt:string;messages:Array<{role:'user'|'assistant';content:string}>;schema:ZodType<T,any,any>;toolName:string;environment?:Environment;rules?:unknown;validate?:(value:T)=>void}):Promise<{value:T;trace:AgentTrace}>{
+export async function runStructuredAgent<T>(input:{prompt:string;messages:Array<{role:'user'|'assistant';content:string}>;schema:ZodType<T,any,any>;toolName:string;environment?:Environment;rules?:unknown;onEvent?:AgentEventSink;stage?:'intake'|'draft'|'verify';validate?:(value:T)=>void}):Promise<{value:T;trace:AgentTrace}>{
  const {Agent}=await import('@earendil-works/pi-agent-core');
  const {Type}=await import('typebox');
  const env=input.environment||process.env;
@@ -77,9 +80,10 @@ export async function runStructuredAgent<T>(input:{prompt:string;messages:Array<
   return{content:[{type:'text',text:'已接收此阶段结果。文件保存和最终完成状态由业务系统确认。'}],details:{accepted:true},terminate:true};
  }};
  const tools:AgentTool[]=[terminal];
+ if(input.stage)tools.unshift({name:'get_legal_skill',label:'读取中国合同规则',description:'按需读取中国法律Skill参考。路径索引：'+JSON.stringify(legalSkillIndex()),parameters:Type.Object({path:Type.String(),offset:Type.Optional(Type.Integer({minimum:0}))}),execute:async(_id,args)=>({content:[{type:'text',text:JSON.stringify(readLegalSkill(String((args as {path:string}).path),Number((args as {offset?:number}).offset)||0))}],details:{}})});
  if(input.rules)tools.unshift({name:'get_contract_rules',label:'读取合同规则',description:'读取当前支持的合同类型、适用范围和预设起草规则。',parameters:Type.Object({}),execute:async()=>({content:[{type:'text',text:JSON.stringify(input.rules)}],details:{}})});
- const agent=new Agent({initialState:{model,systemPrompt:input.prompt+'\n请使用 '+input.toolName+' 工具提交结果（放在 result 中），不要只描述你准备做什么。',tools},streamFn:transport(env,Date.now()+Math.min(65000,Math.max(1000,Number(env.CONTRACT_AI_TIMEOUT_MS)||65000))),toolExecution:'sequential',shouldStopAfterTurn:()=>result!==undefined||trace.turns>=4,beforeToolCall:async()=>result!==undefined?{block:true,reason:'本阶段已提交',terminate:true}:undefined});
- agent.subscribe(event=>{if(event.type==='turn_start')trace.turns++;if(event.type==='tool_execution_start')trace.tools.push(event.toolName)});
+ const agent=new Agent({initialState:{model,systemPrompt:input.prompt+'\n请使用 '+input.toolName+' 工具提交结果（放在 result 中），不要只描述你准备做什么。',tools},streamFn:transport(env,Date.now()+Math.min(65000,Math.max(1000,Number(env.CONTRACT_AI_TIMEOUT_MS)||65000)),input.stage||'draft',input.onEvent),toolExecution:'sequential',shouldStopAfterTurn:()=>result!==undefined||trace.turns>=(input.stage?8:4),beforeToolCall:async()=>result!==undefined?{block:true,reason:'本阶段已提交',terminate:true}:undefined});
+ agent.subscribe(event=>{if(event.type==='turn_start')trace.turns++;if(event.type==='tool_execution_start'){trace.tools.push(event.toolName);input.onEvent?.({type:'activity',label:event.toolName==='get_legal_skill'?'正在查阅中国合同起草与审查规则':event.toolName==='get_contract_rules'?'正在匹配交易规则':'正在核对本阶段结果'});}});
  await agent.prompt(input.messages.map(m=>m.role==='user'?{role:'user' as const,content:m.content,timestamp:Date.now()}:{role:'assistant' as const,content:[{type:'text' as const,text:m.content}],api:model.api,provider:model.provider,model:model.id,stopReason:'stop' as const,timestamp:Date.now(),usage:{input:0,output:0,cacheRead:0,cacheWrite:0,totalTokens:0,cost:{input:0,output:0,cacheRead:0,cacheWrite:0,total:0}}}));
  if(result===undefined){
   const last=agent.state.messages.at(-1);

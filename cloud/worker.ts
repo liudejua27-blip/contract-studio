@@ -1,3 +1,4 @@
+import {agentStreamResponse} from '../src/server/agent/http-stream';
 import {templateDownload} from '../src/server/template-download';
 import {z,ZodError} from 'zod';
 import {AppError} from './error';
@@ -73,7 +74,7 @@ async function api(request:Request,env:Env):Promise<Response>{
   if(p.length===1&&method==='GET')return json(await contracts.list(env,user));
   if(p.length===1&&method==='POST')return json(await contracts.create(env,user,input),201);
   if(p.length===2&&method==='GET')return json(contracts.view((await contracts.load(env,p[1],user)).contract,user));
-  if(p.length===5&&p[2]==='jobs'&&['run','retry','cancel'].includes(p[4])&&method==='POST'){const c=await contracts.jobAction(env,user,p[1],p[3],p[4] as 'run'|'retry'|'cancel');return json(c);}
+  if(p.length===5&&p[2]==='jobs'&&['run','retry','cancel'].includes(p[4])&&method==='POST'){if(p[4]==='run'&&request.headers.get('accept')?.includes('text/event-stream'))return agentStreamResponse(emit=>contracts.jobAction(env,user,p[1],p[3],'run',emit));const c=await contracts.jobAction(env,user,p[1],p[3],p[4] as 'run'|'retry'|'cancel');return json(c);}
   if(p.length===3&&p[2]==='chat'&&method==='POST'){const c=await contracts.chat(env,user,p[1],input);return json(c);}
   if(p.length===3&&p[2]==='reviews'&&method==='POST')return json(await contracts.submit(env,user,p[1],input),201);
   if(p.length===5&&p[2]==='reviews'&&method==='POST'){

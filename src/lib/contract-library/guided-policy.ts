@@ -1,7 +1,8 @@
+import {GENERAL_CORE,MODULES,selectedModules} from './general';
 import {EXTENDED} from './extended';
 import type {Intake} from '../types';
-export const GUIDED_POLICY_VERSION='guided-2026.09.21.1';
-export const CORE_FIELDS:Record<string,string[]>={software:['partyA','partyB','scope','price','payment','term','deliverables'],service:['partyA','partyB','scope','price','payment','term','deliverables'],purchase:['partyA','partyB','goods','price','payment','term','delivery']};
+export const GUIDED_POLICY_VERSION='guided-2026.09.21.2';
+export const CORE_FIELDS:Record<string,string[]>={general:GENERAL_CORE,software:['partyA','partyB','scope','price','payment','term','deliverables'],service:['partyA','partyB','scope','price','payment','term','deliverables'],purchase:['partyA','partyB','goods','price','payment','term','delivery']};
 for(const [id,p] of Object.entries(EXTENDED))CORE_FIELDS[id]=['partyA','partyB',...p.facts.map(f=>f[0])];
 export const PLAIN_QUESTIONS:Record<string,string>={partyA:'买东西或委托做事的一方，完整名称是什么？',partyB:'卖东西或提供服务的一方，完整名称是什么？',scope:'具体要做哪些东西？可以直接列出你想要的功能或工作。',price:'这次一共多少钱？',payment:'准备怎么付款？例如先付多少，剩下的什么时候付。',term:'准备什么时候开始、什么时候交付？',deliverables:'做完后，对方要交给你哪些东西？',goods:'要买什么、多少件，有没有型号或质量要求？',delivery:'货送到哪里，运费由谁出？'};
 export const PROFESSIONAL_DEFAULTS:Record<string,string>={
@@ -16,7 +17,7 @@ const SCENE_DEFAULTS:Record<string,Record<string,string>>={
  service:{rights:'委托方可为本次约定业务目的使用交付成果。提供方应保密所接触的非公开业务资料，并在履约结束后返还或依法处理，不因交付自动转让全部知识产权。'},
  purchase:{warranty:'商品不符合合同约定的，买方可以依法要求修理、更换、退货或其他适当补救，具体处理与商品问题相适应。'},
 };
-export function defaultsFor(i:Intake){return Object.fromEntries(Object.entries({...Object.fromEntries(Object.entries(PROFESSIONAL_DEFAULTS).filter(([id])=>i.templateId!=='nda'||!['tax','invoice','acceptance','breach'].includes(id))),...SCENE_DEFAULTS[i.templateId],...EXTENDED[i.templateId]?.defaults}).filter(([id])=>!i.facts[id]&&!i.withdrawnFields?.includes(id)));}
+export function defaultsFor(i:Intake){return Object.fromEntries(Object.entries({...Object.fromEntries(Object.entries(PROFESSIONAL_DEFAULTS).filter(([id])=>i.templateId==='general'?!['tax','invoice','acceptance'].includes(id):i.templateId!=='nda'||!['tax','invoice','acceptance','breach'].includes(id))),...SCENE_DEFAULTS[i.templateId],...EXTENDED[i.templateId]?.defaults}).filter(([id])=>!i.facts[id]&&!i.withdrawnFields?.includes(id)));}
 export function effectiveTerms(i:Intake){return {...(i.policyVersion?i.defaults||{}:{}),...Object.fromEntries(Object.entries(i.facts).map(([k,v])=>[k,v.value]))};}
 export function lawyerChecklist(i:Intake){return [...new Set([...(i.reviewNotes||[]),...Object.keys(i.defaults||{}).map(id=>`复核系统起草条款：${id}`),...(i.withdrawnFields||[]).map(id=>`用户撤回了 ${id}，不得沿用旧约定`)])];}
 
@@ -24,6 +25,7 @@ export function lawyerChecklist(i:Intake){return [...new Set([...(i.reviewNotes|
 export function sceneQuestions(i:Intake):{fieldId:string;question:string}[]{
  const text=Object.values(i.facts).map(f=>f.value).join('；');
  const questions:{fieldId:string;question:string}[]=[];
+ if(i.templateId==='general')for(const id of selectedModules(i)){const m=MODULES[id];if(!i.facts[m.field])questions.push({fieldId:m.field,question:m.question});}
  if(i.templateId==='software'&&!/源码|源代码/.test(i.facts.deliverables?.value||'')&&!i.facts.sourceDelivery)questions.push({fieldId:'sourceDelivery',question:'软件做完后，源代码需要一起交付吗？'});
  if(i.templateId==='software'&&/维护|运维|持续支持/.test(text)&&(!i.facts.maintenance||!/[天月年]|长期|持续到|截止|仅修复|不需要|不用/.test(i.facts.maintenance.value)))questions.push({fieldId:'maintenance',question:'上线后需要对方继续做哪些维护，持续多久？'});
  if(i.templateId==='purchase'&&/安装|调试/.test(text)&&(!i.facts.installation||!/(负责|由|包安装)/.test(i.facts.installation.value)||!/(含|免费|另付|费用|自理)/.test(i.facts.installation.value)))questions.push({fieldId:'installation',question:'安装和调试由谁负责，费用包含在总价里吗？'});

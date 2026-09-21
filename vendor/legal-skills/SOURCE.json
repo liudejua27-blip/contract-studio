@@ -1,0 +1,11 @@
+{
+  "repository": "https://github.com/pa1nrui1/legal-skills",
+  "commit": "5e39b9c30cc66ece89ff64cdafbeddde80c6b507",
+  "license": "MIT",
+  "scope": [
+    "合同起草",
+    "合同审查",
+    "法律工作总控"
+  ],
+  "scriptsEnabled": false
+}

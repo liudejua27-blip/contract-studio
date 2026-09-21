@@ -353,7 +353,7 @@ function workflowStore(actor:User,contractId:string):WorkflowStore{return{
  limit:async()=>{},
 };}
 export async function chatContract(actor:User,contractId:string,input:unknown):Promise<Contract>{return startWorkflow(workflowStore(actor,contractId),actor,input);}
-export async function jobAction(actor:User,contractId:string,jobId:string,action:'run'|'retry'|'cancel'){return controlWorkflow(workflowStore(actor,contractId),actor,jobId,action);}
+export async function jobAction(actor:User,contractId:string,jobId:string,action:'run'|'retry'|'cancel',onEvent?:import('../lib/agent-stream').AgentEventSink){return controlWorkflow({...workflowStore(actor,contractId),onEvent},actor,jobId,action);}
 
 export async function submitReview(actor: AuthContext['user'], contractId: string, input: unknown): Promise<Contract> {
   const parsed = reviewInput.parse(input);

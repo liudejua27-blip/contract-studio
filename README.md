@@ -19,8 +19,8 @@ npm run dev
 
 ## 用户流程
 
-1. 用户登录，描述业务与约定；AI 追问必要信息，点击“生成合同草稿”创建实际 Word。
-2. 预览、下载、继续提出修改要求。每次生成均保存为新版本。
+1. 用户登录，描述业务与约定；AI 每轮只问 1–3 个必要的生意问题，确认交易摘要后创建实际 Word。专业条款采用独立的系统规则，留给律师审核。
+2. 律师审核前即可预览、下载 AI 初稿、继续提出修改要求；页面明确标注审核状态。每次生成均保存为新版本。
 3. 指定版本、审核立场和关注事项，提交审核；平台管理员分配律师。
 4. 律师在工作台查看需求与原始记录，在线修改，或上传本地修改后的 DOCX。
 5. 必要时向用户请求补充信息；用户在审核页面回复。
@@ -29,7 +29,9 @@ npm run dev
 
 ## 真实模型与示例
 
-模型在服务端调用 OpenAI-compatible Chat Completions 接口，配置 `CONTRACT_AI_BASE_URL`、`CONTRACT_AI_MODEL`、`CONTRACT_AI_API_KEY`。只配置密钥不代表连通或质量已验证。模型失败或结构不合法时不会降级为“成功合同”。
+Pi Agent Core 在服务端负责有限次数的工具循环，沿用 OpenAI-compatible Chat Completions 接口和现有 DeepSeek 配置：`CONTRACT_AI_BASE_URL`、`CONTRACT_AI_MODEL`、`CONTRACT_AI_API_KEY`。交易事实、系统默认条款和律师待审事项分别保存。模型失败或结构不合法时不会降级为“成功合同”。
+
+Cloudflare 版本支持 Worker + D1 + R2；绑定 `AGENT_QUEUE` 后由队列推进生成任务，定时任务修复遗漏的唤醒。未绑定队列时保留现有前台推进方式。队列部署要求与本地验收证据见 [Pi 改造说明](docs/PI-AGENT-CORE-2026-09-21.md)。
 
 本地开发可设置 `CONTRACT_DEMO_MODE=true`，再由用户显式勾选“示例体验”。示例使用固定结构和需求原文，不调用模型，版本 source 标记为 `demo`，仅供技术流程验收。生产环境禁用该模式。
 

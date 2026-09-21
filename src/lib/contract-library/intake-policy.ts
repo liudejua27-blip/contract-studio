@@ -13,7 +13,7 @@ export function acceptSuggestions(i:Intake){const next=structuredClone(i);if(i.p
 
 /** Explicit installment edits must not keep a stale model extraction. */
 export function paymentEditUnresolved(latest:string,value:string|undefined){
- const match=latest.match(/([两二三四五六七八九十1-9])次(?:付款|支付)/);if(!match)return false;
+ const match=latest.match(/([两二三四五六七八九十1-9])次(?:付款|支付|付)/);if(!match)return false;
  const n=Number(match[1])||({'两':2,'二':2,'三':3,'四':4,'五':5,'六':6,'七':7,'八':8,'九':9,'十':10} as Record<string,number>)[match[1]];
  if(/(?:比例|金额|节点).{0,5}(?:未定|没想好|未确定|不知道|不确定)/.test(latest))return true;
  if(!value)return true;

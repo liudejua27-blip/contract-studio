@@ -69,3 +69,18 @@ test('interrupted provider response is retried without exposing an unfinished re
  assert.equal(calls,2);assert.ok(result.intake);assert.ok(events.some(e=>e.type==='activity'&&e.label.includes('自动恢复')));assert.doesNotMatch(result.reply,/未完成/);
  }finally{globalThis.fetch=old}
 });
+test('known source delivery and month/day dates are retained despite model rewriting; two installments still need a proposal',async()=>{
+ const old=fetch;try{
+ const term='项目从9月25号开始，10月25号完成',source='软件做完后，源代码需要一起交付',payment='这8万元打算分2次付';
+ globalThis.fetch=async()=>call('update_contract_spec',{templateId:'software',facts:[{fieldId:'term',value:'2026年9月25日开始，2026年10月25日完成',quote:term},{fieldId:'sourceDelivery',value:source,quote:source},{fieldId:'payment',value:payment,quote:payment}]});
+ const r=await collectIntake([{id:'m',role:'user',content:source+'。'+payment+'.付款方式按照常见方式处理。'+term,createdAt:''}],undefined,env);
+ assert.equal(r.intake!.facts.term.value,term);assert.equal(r.intake!.facts.deliverables.value,source);assert.equal(r.intake!.facts.payment,undefined);assert.ok(r.intake!.businessProposals!.some(p=>p.fieldId==='payment'));assert.doesNotMatch(r.reply,/什么时候开始|交给你哪些/);
+ }finally{globalThis.fetch=old}
+});
+test('refusing source delivery is not converted into an affirmative deliverable',async()=>{
+ const old=fetch;try{globalThis.fetch=async()=>call('update_contract_spec',{templateId:'software',facts:[{fieldId:'sourceDelivery',value:'不提供源码',quote:'不提供源码'}]});const r=await collectIntake([{id:'m',role:'user',content:'不提供源码',createdAt:''}],undefined,env);assert.equal(r.intake!.facts.deliverables,undefined);}finally{globalThis.fetch=old}
+});
+test('explicitly accepting the last missing proposal preserves known facts without another model call',async()=>{
+ const {intakeFixture}=await import('./fixtures');const previous=intakeFixture('software');delete previous.facts.payment;delete previous.confirmedAt;previous.missing=['payment'];previous.businessProposals=[{id:'proposal',fieldId:'payment',value:'签署后支付50%，验收后支付50%'}];const known=structuredClone(previous.facts),old=fetch;
+ try{globalThis.fetch=async()=>{throw new Error('adoption must not re-extract facts')};const r=await collectIntake([{id:'m',role:'user',content:'采用建议：'+previous.businessProposals[0].value,createdAt:''}],previous,env);assert.deepEqual(r.intake!.missing,[]);assert.equal(r.intake!.facts.payment.source,'accepted_proposal');for(const [id,fact] of Object.entries(known))assert.deepEqual(r.intake!.facts[id],fact);}finally{globalThis.fetch=old}
+});

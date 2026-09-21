@@ -1,3 +1,4 @@
+import {consultationBrief} from '../src/lib/consultation';
 import {listQuery,summary} from '../src/lib/contract-list';
 import {startWorkflow,controlWorkflow,activeJob,type WorkflowStore} from '../src/server/workflow';
 import {getTemplate} from '../src/lib/contract-library/catalog';
@@ -46,14 +47,16 @@ export function workflowStore(env:Env,u:User,id:string):WorkflowStore{return{
 export async function chat(env:Env,u:User,id:string,input:unknown){return startWorkflow(workflowStore(env,u,id),u,input);}
 export async function jobAction(env:Env,u:User,id:string,jobId:string,action:'run'|'retry'|'cancel'){return controlWorkflow(workflowStore(env,u,id),u,jobId,action);}
 export async function submit(env:Env,u:User,id:string,input:unknown){
- const v=z.object({versionId:z.string().uuid(),lawyerId:z.string().uuid().optional(),stance:z.string().trim().min(1).max(100),concerns:z.string().trim().max(3000).default('')}).parse(input);
+ const v=z.object({versionId:z.string().uuid().optional(),consultation:z.boolean().default(false),lawyerId:z.string().uuid().optional(),stance:z.string().trim().min(1).max(100),concerns:z.string().trim().max(3000).default('')}).parse(input);
  const {row,contract:c}=await load(env,id,u);if(c.ownerId!==u.id||u.role!=='client')fail('FORBIDDEN','仅合同所有者可送审。',403);
  if(activeJob(c))fail('JOB_ACTIVE','请等待当前起草完成。');
  if(c.reviews.some(r=>r.status!=='completed'))fail('REVIEW_ALREADY_OPEN');
- if(!c.versions.some(x=>x.id===v.versionId))fail('VERSION_NOT_FOUND','版本不存在。',404);
+ if(!v.versionId&&!v.consultation)fail('VERSION_REQUIRED','请选择合同版本或提交需求咨询。',400);
+ if(v.consultation&&!c.messages.some(m=>m.role==='user'))fail('REQUIREMENTS_REQUIRED','请先描述交易需求。',400);
+ if(v.versionId&&!c.versions.some(x=>x.id===v.versionId))fail('VERSION_NOT_FOUND','版本不存在。',404);
  const selected=v.lawyerId?await env.DB.prepare("SELECT id,name FROM users WHERE id=? AND role='lawyer' AND disabled=0").bind(v.lawyerId).first<{id:string;name:string}>():null;
  if(v.lawyerId&&!selected)fail('LAWYER_UNAVAILABLE','该律师目前无法接收审核，请重新选择。',400);
- c.reviews.push({id:crypto.randomUUID(),submittedVersionId:v.versionId,lawyerId:selected?.id||null,lawyerName:selected?.name,status:'waiting',stance:v.stance,concerns:v.concerns,requirements:c.messages.map(m=>`${m.role==='user'?'用户':'AI'}：${m.content}`).join('\n'),submittedAt:stamp(),messages:[]});return save(env,row,c,u);
+ c.reviews.push({id:crypto.randomUUID(),submittedVersionId:v.consultation?null:v.versionId!,lawyerId:selected?.id||null,lawyerName:selected?.name,status:'waiting',stance:v.stance,concerns:v.concerns,requirements:(v.consultation?consultationBrief(c):'')+c.messages.map(m=>`${m.role==='user'?'用户':'AI'}：${m.content}`).join('\n'),submittedAt:stamp(),messages:[]});return save(env,row,c,u);
 }
 export async function reviewAction(env:Env,u:User,id:string,reviewId:string,action:string,input:any){
  const {row,contract:c}=await load(env,id,u);const r=c.reviews.find(r=>r.id===reviewId);if(!r)fail('REVIEW_NOT_FOUND','审核不存在。',404);const review=r!;

@@ -48,6 +48,20 @@ try{
  const final=await mf.dispatchFetch('https://contract.test/api/files/'+finalId,{headers:{cookie:client.cookie}});assert.deepEqual(Buffer.from(await final.arrayBuffer()),bytes);pass('client receives exact lawyer upload');
  await draft();const newDraft=c.versions.at(-1);assert.equal(newDraft.content.drafting.templateId,'purchase');assert.equal(c.versions.find(x=>x.id===v.id).content.drafting.createdAt,v.content.drafting.createdAt);const restricted=await req(lawyer,`contracts/${c.id}`);assert.ok(!restricted.versions.some(v=>v.id===newDraft.id));await req(lawyer,'files/'+newDraft.id,undefined,404);pass('lawyer cannot see client post-delivery draft');
  const before=await db.prepare('SELECT revision FROM contracts WHERE id=?').bind(c.id).first();const concurrent=await Promise.all([mf.dispatchFetch('https://contract.test/api/'+`contracts/${c.id}/reviews`,{method:'POST',headers:{cookie:client.cookie,'content-type':'application/json'},body:JSON.stringify({versionId:newDraft.id,stance:'甲方'})}),mf.dispatchFetch('https://contract.test/api/'+`contracts/${c.id}/reviews`,{method:'POST',headers:{cookie:client.cookie,'content-type':'application/json'},body:JSON.stringify({versionId:newDraft.id,stance:'乙方'})})]);assert.equal(concurrent.filter(r=>r.status===201).length,1);assert.equal(concurrent.filter(r=>r.status===409).length,1);pass('concurrent submissions commit only one review');
+ let consult=await req(client,'contracts',{title:'未定事项咨询'},201);
+ consult=await req(client,`contracts/${consult.id}/chat`,{requestId:crypto.randomUUID(),message:'想采购设备，价格还没谈妥'});
+ consult=await req(client,`contracts/${consult.id}/jobs/${consult.workflow.job.id}/run`,{});
+ await req(other,`contracts/${consult.id}/reviews`,{consultation:true,stance:'买方'},404);
+ consult=await req(client,`contracts/${consult.id}/reviews`,{consultation:true,stance:'买方',lawyerId:lawyerUser.id},201);
+ assert.equal(consult.versions.length,0);assert.equal(consult.reviews[0].submittedVersionId,null);
+ const consultBase=`contracts/${consult.id}/reviews/${consult.reviews[0].id}`;
+ const brief=await req(lawyer,`contracts/${consult.id}`);assert.match(brief.reviews[0].requirements,/需求咨询/);
+ await req(lawyer,consultBase+'/start',{});await req(lawyer,consultBase+'/messages',{content:'请补充谈妥的价格',requestInfo:true});
+ await req(client,consultBase+'/messages',{content:'已谈妥一万元'});
+ const uploadForm=new FormData();uploadForm.set('file',new File([bytes],'lawyer.docx'));
+ consult=await req(lawyer,consultBase+'/upload',uploadForm);
+ consult=await req(lawyer,consultBase+'/complete',{versionId:consult.reviews[0].editingVersionId,deliveryNote:'已根据补充需求完成起草'});
+ assert.equal(consult.reviews[0].status,'completed');pass('no-draft consultation: owner isolation, lawyer communication, upload and delivery');
  await req(admin,'users/'+lawyerUser.id,{disabled:true},200,'PATCH');assert.equal(await req(lawyer,'session'),null);await req(lawyer,'contracts',undefined,401);pass('disabled account session is revoked');
  const original=c.id,ownerId=(await req(client,'session')).id;for(let i=0;i<101;i++){const id=crypto.randomUUID(),state={id,ownerId,ownerName:'test',title:'分页样例'+i,createdAt:'2099-01-01T00:00:00.000Z',updatedAt:'2099-01-01T00:00:00.000Z',messages:[],versions:[],reviews:[]};await db.prepare('INSERT INTO contracts(id,owner_id,state,revision,updated_at) VALUES(?,?,?,0,?)').bind(id,ownerId,JSON.stringify(state),state.updatedAt).run();}
  const first=await req(client,'contract-list?page=1');assert.equal(first.items.length,20);assert.equal(first.hasMore,true);assert.ok(first.items.every(x=>!('messages' in x)&&!('versions' in x)));const last=await req(client,'contract-list?page=6');assert.ok(last.items.some(x=>x.id===original));const search=await req(client,'contract-list?q='+encodeURIComponent(c.title));assert.ok(search.items.some(x=>x.id===original));assert.equal((await req(other,'contract-list?q='+encodeURIComponent('分页样例'))).total,0);assert.equal((await req(client,'contracts/'+original)).id,original);pass('paginated summaries and server search find older contracts without crossing owners');

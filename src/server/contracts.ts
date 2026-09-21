@@ -1,3 +1,4 @@
+import {consultationBrief} from '../lib/consultation';
 import {listQuery,summary} from '../lib/contract-list';
 import {startWorkflow,controlWorkflow,type WorkflowStore} from './workflow';
 import {getTemplate} from '../lib/contract-library/catalog';
@@ -58,7 +59,7 @@ type VersionRow = {
 
 type ReviewRow = {
   id: string;
-  submitted_version_id: string;
+  submitted_version_id: string | null;
   lawyer_id: string | null;
   lawyer_name?: string;
   handoff_version_id?:string;
@@ -109,7 +110,8 @@ const chatInput = z.object({
 
 const reviewInput = z.object({
   lawyerId: z.string().uuid().optional(),
-  versionId: z.string().trim().min(1),
+  versionId: z.string().trim().min(1).optional(),
+  consultation: z.boolean().default(false),
   stance: z.string().trim().min(1).max(10_000),
   concerns: z.string().trim().max(50_000).default(''),
 });
@@ -369,6 +371,8 @@ export async function submitReview(actor: AuthContext['user'], contractId: strin
     if (await openReviewExists(contractId, client)) {
       throw new AppError(409, 'An open review already exists for this contract.', 'REVIEW_ALREADY_OPEN');
     }
+    if(!parsed.versionId&&!parsed.consultation)throw new AppError(400,'请选择合同版本或提交需求咨询。','VERSION_REQUIRED');
+    if(!parsed.consultation){
     const version = await client.query<{ id: string; kind: string; content: unknown }>(
       'SELECT id, kind, content FROM versions WHERE id = $1 AND contract_id = $2 LIMIT 1',
       [parsed.versionId, contractId],
@@ -376,6 +380,7 @@ export async function submitReview(actor: AuthContext['user'], contractId: strin
     if (!version.rows[0]) throw new AppError(404, 'Version not found.', 'VERSION_NOT_FOUND');
     if (version.rows[0].kind !== 'draft' || !version.rows[0].content) {
       throw new AppError(409, 'Only an immutable draft version can be submitted for review.', 'VERSION_NOT_SUBMITTABLE');
+    }
     }
     const messages = await client.query<{ role: string; content: string }>(
       'SELECT role, content FROM messages WHERE contract_id = $1 ORDER BY seq ASC',
@@ -385,12 +390,14 @@ export async function submitReview(actor: AuthContext['user'], contractId: strin
       const target=await client.query("SELECT id FROM users WHERE id=$1 AND role='lawyer' AND disabled=false FOR SHARE",[parsed.lawyerId]);
       if(!target.rows[0])throw new AppError(400,'该律师目前无法接收审核，请重新选择。','LAWYER_UNAVAILABLE');
     }
-    const requirements = messages.rows.map((message) => `${message.role === 'user' ? '客户' : '助手'}：${message.content}`).join('\n');
+    if(parsed.consultation&&!messages.rows.some(m=>m.role==='user'))throw new AppError(400,'请先描述交易需求。','REQUIREMENTS_REQUIRED');
+    const snapshot=await client.query('SELECT workflow FROM contracts WHERE id=$1',[contractId]);
+    const requirements = (parsed.consultation?consultationBrief({workflow:snapshot.rows[0]?.workflow}):'')+messages.rows.map((message) => `${message.role === 'user' ? '客户' : '助手'}：${message.content}`).join('\n');
     await client.query(
       `INSERT INTO reviews
        (id, contract_id, submitted_version_id, status, stance, concerns, requirements, lawyer_id)
        VALUES ($1, $2, $3, 'waiting', $4, $5, $6, $7)`,
-      [randomUUID(), contractId, parsed.versionId, parsed.stance, parsed.concerns, requirements, parsed.lawyerId||null],
+      [randomUUID(), contractId, parsed.consultation?null:parsed.versionId, parsed.stance, parsed.concerns, requirements, parsed.lawyerId||null],
     );
     await client.query('UPDATE contracts SET updated_at = now() WHERE id = $1', [contractId]);
   });
@@ -685,6 +692,7 @@ export async function editorConfig(actor: AuthContext['user'], contractId: strin
   if (!isAssigned && !viewOnly && actor.role !== 'admin') throw new AppError(403, 'Only the assigned lawyer can edit.', 'FORBIDDEN');
   const session = isAssigned ? await ensureEditorSession(actor, contractId, reviewId) : null;
   const versionId = session?.base_version_id ?? current.review.editing_version_id ?? current.review.handoff_version_id ?? current.review.submitted_version_id;
+  if(!versionId)throw new AppError(409,'请先上传律师起草的 Word，再打开编辑器。','VERSION_REQUIRED');
   const version = await query<{ id: string; number: number; file_key: string; title: string }>(
     `SELECT v.id, v.number, v.file_key, c.title
      FROM versions v JOIN contracts c ON c.id = v.contract_id

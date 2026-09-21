@@ -59,3 +59,27 @@ test('semantic mismatches trigger at most two automatic redrafts and never expor
  assert.equal(verifyCount,3);assert.equal(c.workflow.job.repairCount,2);assert.equal(c.workflow.job.status,'failed');assert.equal(c.versions.length,0);
  }finally{globalThis.fetch=old}
 });
+test('extraction cannot add non-numeric obligations, and lawyer notes survive subsequent turns',async()=>{
+ const old=fetch;const i=intakeFixture();i.reviewNotes=['排他使用需律师复核'];
+ try{globalThis.fetch=async()=>call('update_contract_spec',{result:{templateId:'software',facts:[{fieldId:'scope',value:'开发网站并提供终身免费维护',quote:'做一个网站'}]}});
+ const r=await collectIntake([{id:'m',role:'user',content:'做一个网站',createdAt:''}],i,env);
+ assert.equal(r.intake!.facts.scope.value,'做一个网站');assert.deepEqual(r.intake!.reviewNotes,['排他使用需律师复核']);
+ }finally{globalThis.fetch=old}
+});
+test('material scene questions are asked, then deferred without repeatedly asking or inventing arrangements',async()=>{
+ const old=fetch;const i=intakeFixture();delete i.facts.maintenance;i.facts.scope={value:'开发网站，包含运维',quote:'开发网站，包含运维'};
+ let result:any={templateId:'software',facts:[]};
+ try{globalThis.fetch=async()=>call('update_contract_spec',{result});
+ const first=await collectIntake([{id:'m',role:'user',content:'开发网站，包含运维',createdAt:''}],i,env);
+ assert.ok(first.intake!.missing.includes('maintenance'));assert.match(first.reply,/持续多久/);
+ result={templateId:'software',facts:[],deferredFields:[{fieldId:'maintenance',quote:'维护还没定'}]};
+ const next=await collectIntake([{id:'m',role:'user',content:'维护还没定',createdAt:''}],first.intake,env);
+ assert.ok(next.intake!.deferredFields!.includes('maintenance'));assert.doesNotMatch(next.reply,/持续多久/);assert.ok(next.intake!.reviewNotes!.some(n=>n.includes('维护')));assert.equal(next.intake!.facts.maintenance,undefined);
+ }finally{globalThis.fetch=old}
+});
+test('evidence normalization retains negation rather than accepting a misleading substring',async()=>{
+ const old=fetch;try{globalThis.fetch=async()=>call('update_contract_spec',{result:{templateId:'software',facts:[{fieldId:'scope',value:'终身免费维护',quote:'不提供终身免费维护'}]}});
+ const r=await collectIntake([{id:'m',role:'user',content:'不提供终身免费维护',createdAt:''}],intakeFixture(),env);
+ assert.equal(r.intake!.facts.scope.value,'不提供终身免费维护');
+ }finally{globalThis.fetch=old}
+});

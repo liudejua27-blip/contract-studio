@@ -17,3 +17,14 @@ const SCENE_DEFAULTS:Record<string,Record<string,string>>={
 export function defaultsFor(i:Intake){return Object.fromEntries(Object.entries({...PROFESSIONAL_DEFAULTS,...SCENE_DEFAULTS[i.templateId]}).filter(([id])=>!i.facts[id]&&!i.withdrawnFields?.includes(id)));}
 export function effectiveTerms(i:Intake){return {...(i.policyVersion?i.defaults||{}:{}),...Object.fromEntries(Object.entries(i.facts).map(([k,v])=>[k,v.value]))};}
 export function lawyerChecklist(i:Intake){return [...new Set([...(i.reviewNotes||[]),...Object.keys(i.defaults||{}).map(id=>`复核系统起草条款：${id}`),...(i.withdrawnFields||[]).map(id=>`用户撤回了 ${id}，不得沿用旧约定`)])];}
+
+/** Ask business questions only when the transaction itself makes them material. */
+export function sceneQuestions(i:Intake):{fieldId:string;question:string}[]{
+ const text=Object.values(i.facts).map(f=>f.value).join('；');
+ const questions:{fieldId:string;question:string}[]=[];
+ if(i.templateId==='software'&&!/源码|源代码/.test(i.facts.deliverables?.value||'')&&!i.facts.sourceDelivery)questions.push({fieldId:'sourceDelivery',question:'软件做完后，源代码需要一起交付吗？'});
+ if(i.templateId==='software'&&/维护|运维|持续支持/.test(text)&&(!i.facts.maintenance||!/[天月年]|长期|持续到|截止|仅修复|不需要|不用/.test(i.facts.maintenance.value)))questions.push({fieldId:'maintenance',question:'上线后需要对方继续做哪些维护，持续多久？'});
+ if(i.templateId==='purchase'&&/安装|调试/.test(text)&&(!i.facts.installation||!/(负责|由|包安装)/.test(i.facts.installation.value)||!/(含|免费|另付|费用|自理)/.test(i.facts.installation.value)))questions.push({fieldId:'installation',question:'安装和调试由谁负责，费用包含在总价里吗？'});
+ if(i.templateId==='service'&&/拍摄|视频|广告|宣传/.test(text)&&(!i.facts.usage||!/(用于|用在|投放|发布|平台|抖音|小红书|内部|门店播放)/.test(i.facts.usage.value)))questions.push({fieldId:'usage',question:'做好的内容准备用在哪些地方？需要用于广告投放吗？'});
+ return questions;
+}

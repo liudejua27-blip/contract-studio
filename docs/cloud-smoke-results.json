@@ -1,6 +1,6 @@
 {
   "result": "passed",
-  "time": "2026-09-20T13:52:20.180Z",
+  "time": "2026-09-21T01:20:52.831Z",
   "checks": [
     "administrator first login is credential-bound, reserved, and single-use",
     "roles and registration privilege boundaries",

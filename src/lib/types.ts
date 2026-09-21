@@ -10,6 +10,6 @@ export interface Contract { workflow?: Workflow; id: string; ownerId: string; ow
 export interface Capabilities { aiConfigured: boolean; demoEnabled: boolean; onlyofficeConfigured: boolean; storage: string }
 
 export interface IntakeFact { value:string; quote:string }
-export interface Intake { inputRevision?:number; templateId:string; facts:Record<string,IntakeFact>; missing:string[]; conflicts:string[]; summaryId:string; confirmedAt?:string }
+export interface Intake { suggestions?:Record<string,string>; inputRevision?:number; templateId:string; facts:Record<string,IntakeFact>; missing:string[]; conflicts:string[]; summaryId:string; confirmedAt?:string }
 export interface GenerationJob { id:string; messageId:string; phase:'understand'|'generate'|'verify'|'export'; status:'pending'|'running'|'failed'|'completed'|'cancelled'; attempt:number; lease?:string; leaseUntil?:string; error?:string; code?:string; createdAt:string; updatedAt:string; content?:ContractContent; versionId:string }
 export interface Workflow { inputRevision?:number; intake?:Intake; job?:GenerationJob; receipts?:{id:string;message:string;confirmId?:string}[] }

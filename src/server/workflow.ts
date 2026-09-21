@@ -1,3 +1,4 @@
+import {acceptSuggestions,requiredFields} from '../lib/contract-library/intake-policy';
 import {intakeFactIssues} from '../lib/contract-library/fact-checks';
 import {PLAYBOOKS} from '../lib/contract-library/playbooks';
 import {intakeIsCurrent} from '../lib/intake-state';
@@ -24,7 +25,7 @@ export async function startWorkflow(store:WorkflowStore,u:User,input:unknown){
  if(c.reviews.some(r=>r.status!=='completed'))fail('REVIEW_VERSION_FROZEN','请在律师审核沟通中补充信息。');
  if(activeJob(c))fail('JOB_ACTIVE','当前任务仍在处理，请等待或取消。');
  let phase:'understand'|'generate'='understand';
- if(v.confirmId){if(c.versions.some(version=>version.content?.confirmation?.summaryId===v.confirmId))return c;const i=c.workflow.intake;if(!i||!intakeIsCurrent(c)||i.summaryId!==v.confirmId||i.missing.length||i.conflicts.length)fail('CONFIRMATION_REQUIRED','约定摘要已变化，请重新核对。');const issues=intakeFactIssues(i!);if(issues.length||PLAYBOOKS[i!.templateId]?.fields.some(f=>!i!.facts[f.id]))fail('CONFIRMATION_REQUIRED',issues.join('；')||'起草规则已更新，请补充税费和发票安排后重新确认。');i!.confirmedAt=now();phase='generate';}
+ if(v.confirmId){if(c.versions.some(version=>version.content?.confirmation?.summaryId===v.confirmId))return c;const i=c.workflow.intake;if(!i||!intakeIsCurrent(c)||i.summaryId!==v.confirmId||i.missing.length||i.conflicts.length)fail('CONFIRMATION_REQUIRED','约定摘要已变化，请重新核对。');const issues=intakeFactIssues(i!);if(issues.length||requiredFields(i!.templateId).some(f=>!i!.facts[f.id]&&!i!.suggestions?.[f.id]))fail('CONFIRMATION_REQUIRED',issues.join('；')||'起草规则已更新，请补充税费和发票安排后重新确认。');c.workflow.intake=acceptSuggestions(i!);c.workflow.intake.confirmedAt=now();phase='generate';}
  else if(!v.message)fail('INVALID_INPUT','请输入合作需求。',400);
  await store.limit();
  if(phase==='understand'){c.workflow.inputRevision=(c.workflow.inputRevision||0)+1;if(c.workflow.intake)delete c.workflow.intake.confirmedAt;}
@@ -64,7 +65,7 @@ export async function controlWorkflow(store:WorkflowStore,u:User,id:string,actio
  }catch(e){
   const fresh=await store.load(),currentJob=fresh.contract.workflow?.job;
   if(currentJob?.id===id&&currentJob.lease===lease&&currentJob.status==='running'){
-   currentJob.status='failed';currentJob.code=e instanceof AppError?e.code:'TASK_FAILED';const messages:Record<string,string>={AI_PROVIDER_ERROR:'模型服务返回错误，需求已保存，请重试。',AI_PROVIDER_UNAVAILABLE:'暂时无法连接模型服务，需求已保存，请重试。',AI_NOT_CONFIGURED:'模型服务尚未配置，请联系管理员。',AI_INVALID_CONTRACT:'模型返回的合同结构不完整，请重试。',AI_EMPTY_RESPONSE:'模型没有返回内容，请重试。'};currentJob.error=messages[currentJob.code]||(e instanceof AppError?e.message:'本次处理未完成，信息已保存，请重试。');currentJob.updatedAt=now();delete currentJob.leaseUntil;
+   currentJob.status='failed';currentJob.code=e instanceof AppError?e.code:'TASK_FAILED';const messages:Record<string,string>={AI_PROVIDER_ERROR:'模型服务返回错误，需求已保存，请重试。',AI_PROVIDER_UNAVAILABLE:'暂时无法连接模型服务，需求已保存，请重试。',AI_NOT_CONFIGURED:'模型服务尚未配置，请联系管理员。',AI_INVALID_CONTRACT:'模型返回的合同结构不完整，请重试。',AI_EMPTY_RESPONSE:'模型连续未返回有效回答，已自动重试一次。你的消息和已确认信息均已保存，可以重试继续，无需重新填写。'};currentJob.error=messages[currentJob.code]||(e instanceof AppError?e.message:'本次处理未完成，信息已保存，请重试。');currentJob.updatedAt=now();delete currentJob.leaseUntil;
    console.error(JSON.stringify({event:'contract_task',job:id,phase:j.phase,code:currentJob.code,elapsedMs:Date.now()-started}));return store.save(fresh.contract,fresh.revision);
   }return fresh.contract;
  }

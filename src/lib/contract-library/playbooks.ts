@@ -1,5 +1,5 @@
 import type {Field} from './catalog';
-export const PLAYBOOK_VERSION='2026.09.20.4';
+export const PLAYBOOK_VERSION='2026.09.21.1';
 const field=(id:string,label:string,question:string):Field=>({id,label,question});
 const common=[field('partyA','甲方名称与角色','委托方或买方的完整名称是什么？'),field('partyB','乙方名称与角色','承接方或卖方的完整名称是什么？'),field('contacts','双方联系与通知','双方用于合同通知的地址或邮箱分别是什么？'),field('price','合同总价','合同总价多少元？'),field('tax','税费安排','总价是否含税？税费由谁承担？'),field('invoice','发票安排','是否开票，开哪类发票？'),field('payment','付款安排','分几次付款，各在什么条件下支付多少？'),field('term','期限与地点','从什么事件或日期起算，到何时、在哪里完成？'),field('acceptance','验收与整改','按哪些标准验收，多久反馈，不合格怎样整改？'),field('breach','违约与解除','逾期、不履行或中途终止时，如何补救、结算和承担责任？'),field('disputes','适用地区与争议解决','是否适用中国大陆法律？争议选择哪个有实际联系地点的法院或哪家仲裁机构？')];
 export const PLAYBOOKS:Record<string,{fields:Field[];scope:string;exclusions:string;optional:string[];attachments:string[];clauses:string[]}>={
@@ -18,7 +18,7 @@ export function exportProblems(c:import('../types').ContractContent):string[]{
  if(c.parties.length!==2||c.parties.some(p=>!p.name.trim()))errors.push('双方名称不完整');
  const p=c.confirmation&&PLAYBOOKS[c.confirmation.templateId];
  if(!p)errors.push('该类型尚未开放完整合同生成');
- else {if(p.fields.some(f=>!c.confirmation?.facts[f.id]?.value))errors.push('必要约定未齐');if(c.confirmation!.missing.length||c.confirmation!.conflicts.length)errors.push('仍有缺项或冲突');for(const t of p.attachments)if(!c.attachments?.some(a=>a.title===t&&a.content.trim()))errors.push(`缺少附件：${t}`);}
+ else {if(p.fields.filter(f=>f.id!=='contacts').some(f=>!c.confirmation?.facts[f.id]?.value))errors.push('必要约定未齐');if(c.confirmation!.missing.length||c.confirmation!.conflicts.length)errors.push('仍有缺项或冲突');for(const t of p.attachments)if(!c.attachments?.some(a=>a.title===t&&a.content.trim()))errors.push(`缺少附件：${t}`);}
  if(/附件[二三四五六七八九十2-9]/.test(body))errors.push('引用了未登记附件');
  return [...new Set(errors)];
 }

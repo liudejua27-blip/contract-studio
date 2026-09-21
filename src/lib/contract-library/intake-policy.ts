@@ -9,3 +9,14 @@ export const TERM_SUGGESTIONS:Record<string,string>={
 export function requiredFields(templateId:string){return (PLAYBOOKS[templateId]?.fields||[]).filter(f=>f.id!=='contacts');}
 export function suggestedTerms(i:Intake):Record<string,IntakeFact>{return Object.fromEntries(Object.entries(i.suggestions||{}).map(([k,value])=>[k,{value,quote:'用户在约定摘要中确认的系统建议'}]));}
 export function acceptSuggestions(i:Intake){const next=structuredClone(i);next.facts={...suggestedTerms(i),...next.facts};return next;}
+
+/** Explicit installment edits must not keep a stale model extraction. */
+export function paymentEditUnresolved(latest:string,value:string|undefined){
+ const match=latest.match(/([两二三四五六七八九十1-9])次(?:付款|支付)/);if(!match)return false;
+ const n=Number(match[1])||({'两':2,'二':2,'三':3,'四':4,'五':5,'六':6,'七':7,'八':8,'九':9,'十':10} as Record<string,number>)[match[1]];
+ if(/(?:比例|金额|节点).{0,5}(?:未定|没想好|未确定|不知道|不确定)/.test(latest))return true;
+ if(!value)return true;
+ const ratios=[...value.matchAll(/\d+(?:\.\d+)?\s*[%％]/g)].length;
+ const amounts=[...value.matchAll(/\d+(?:\.\d+)?\s*(?:万)?元/g)].length;
+ return ratios!==n&&amounts!==n;
+}

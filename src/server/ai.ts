@@ -1,4 +1,4 @@
-import {TERM_SUGGESTIONS,requiredFields} from '../lib/contract-library/intake-policy';
+import {TERM_SUGGESTIONS,requiredFields,paymentEditUnresolved} from '../lib/contract-library/intake-policy';
 import {unsupportedFactNumbers,intakeFactIssues,draftFactIssues} from '../lib/contract-library/fact-checks';
 import {PLAYBOOKS,intakeSummary,exportProblems} from '../lib/contract-library/playbooks';
 import type {Intake} from '../lib/types';
@@ -227,6 +227,7 @@ reply仅在用户明确提问或寻求建议时回答业务问题，给出待确
  const facts:Record<string,{value:string;quote:string}>=previous?.templateId===r.templateId?structuredClone(previous.facts):{};
  for(const id of r.clearedFields)delete facts[id];
  for(const f of r.facts){delete facts[f.fieldId];if(p.fields.some(x=>x.id===f.fieldId)&&userTexts.some(t=>t.includes(f.quote))&&!unsupportedFactNumbers(f.value,f.quote)&&!/待补充|待确认|不知道|未确定/.test(f.value))facts[f.fieldId]={value:f.value,quote:f.quote};}
+ if(paymentEditUnresolved(messages.filter(m=>m.role==='user').at(-1)?.content||'',facts.payment?.value))delete facts.payment;
  const suggestions=Object.fromEntries(Object.entries(TERM_SUGGESTIONS).filter(([id])=>!facts[id]&&!r.clearedFields.includes(id)));
  const missing=requiredFields(r.templateId!).filter(f=>!facts[f.id]&&!suggestions[f.id]).map(f=>f.id);
  const intake:Intake={templateId:r.templateId!,facts,suggestions,missing,conflicts:r.conflicts,summaryId:crypto.randomUUID()};

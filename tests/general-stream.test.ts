@@ -45,3 +45,27 @@ test('revenue terms satisfy commercial exchange and invalid quotation is correct
 test('unresolved routing retains previous facts and lawyer notes but invalidates confirmation',async()=>{
  const old=fetch;try{globalThis.fetch=async()=>call('update_contract_spec',{templateId:null,facts:[],reviewNotes:['需要专项核对']});const i=intake();i.reviewNotes=['已有待审事项'];const r=await collectIntake([{id:'m',role:'user',content:'现在交易结构需要调整',createdAt:''}],i,env);assert.deepEqual(r.intake!.facts,i.facts);assert.equal(r.intake!.confirmedAt,undefined);assert.ok(r.intake!.conflicts.length);assert.deepEqual(r.intake!.reviewNotes,['已有待审事项','需要专项核对']);}finally{globalThis.fetch=old}
 });
+test('common handling proposes payment once, retains proposal, and explicit adoption records its source',async()=>{
+ const old=fetch;try{
+ const previous:Intake={templateId:'software',facts:{},missing:['payment'],conflicts:[],summaryId:crypto.randomUUID()};
+ globalThis.fetch=async()=>call('update_contract_spec',{templateId:'software',facts:[]});
+ const msg=(content:string)=>({id:crypto.randomUUID(),role:'user' as const,content,createdAt:''});
+ const first=await collectIntake([msg('按常见方式处理')],previous,env);
+ assert.equal(first.intake!.businessProposals!.length,1);assert.equal(first.intake!.businessProposals![0].fieldId,'payment');assert.ok(!first.intake!.facts.payment);assert.doesNotMatch(first.reply,/准备怎么付款/);
+ const second=await collectIntake([msg('按常见方式处理'),msg('先保留这个建议')],first.intake,env);
+ assert.equal(second.intake!.businessProposals![0].value,first.intake!.businessProposals![0].value);
+ const third=await collectIntake([msg('采用建议：'+second.intake!.businessProposals![0].value)],second.intake,env);
+ assert.equal(third.intake!.facts.payment.source,'accepted_proposal');assert.ok(!third.intake!.missing.includes('payment'));
+ }finally{globalThis.fetch=old}
+});
+test('stream flushes its last visible characters even inside throttle window',async()=>{
+ const events:any[]=[];await readModelResponse(response([{choices:[{delta:{content:'{"reply":"完整回答"}'},finish_reason:'stop'}]}]),'intake',e=>events.push(e));
+ assert.equal(events.at(-1).text,'完整回答');
+});
+test('interrupted provider response is retried without exposing an unfinished reply as saved',async()=>{
+ const old=fetch;let calls=0;const events:any[]=[];
+ try{globalThis.fetch=async()=>{calls++;if(calls===1)return response([{choices:[{delta:{content:'{"reply":"未完成'}}]}]);return call('update_contract_spec',{templateId:'software',facts:[]});};
+ const result=await collectIntake([{id:'m',role:'user',content:'我要开发软件',createdAt:''}],undefined,env,e=>events.push(e));
+ assert.equal(calls,2);assert.ok(result.intake);assert.ok(events.some(e=>e.type==='activity'&&e.label.includes('自动恢复')));assert.doesNotMatch(result.reply,/未完成/);
+ }finally{globalThis.fetch=old}
+});

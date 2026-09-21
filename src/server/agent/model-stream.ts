@@ -13,6 +13,9 @@ export async function readModelResponse(response:Response,stage:'intake'|'draft'
   const text=publicPreview(terminal?.function.arguments||content,stage);
   if(text!==last&&Date.now()-lastAt>=80){last=text;lastAt=Date.now();if(text)emit?.({type:'preview',text});}
  }
+ const terminal=[...calls.values()].find(c=>['update_contract_spec','submit_contract_draft'].includes(c.function.name));
+ const finalPreview=publicPreview(terminal?.function.arguments||content,stage);
+ if(finish&&finalPreview!==last&&finalPreview)emit?.({type:'preview',text:finalPreview});
  if(!finish)throw new Error('Incomplete model stream');
  return {choices:[{finish_reason:finish,message:{content,tool_calls:[...calls.values()]}}],usage};
 }

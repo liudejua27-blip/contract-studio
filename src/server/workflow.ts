@@ -25,7 +25,7 @@ export async function startWorkflow(store:WorkflowStore,u:User,input:unknown){
  const v=z.object({requestId:z.string().uuid(),message:z.string().trim().max(16000).default(''),confirmId:z.string().uuid().optional()}).parse(input);
  const {contract:c,revision}=await store.load();owner(c,u);c.workflow??={};
  const old=c.workflow.receipts?.find(r=>r.id===v.requestId);if(old){if(old.message!==v.message||old.confirmId!==v.confirmId)fail('IDEMPOTENCY_CONFLICT','重复请求的内容不一致。');return c;}
- if(c.reviews.some(r=>r.status!=='completed'))fail('REVIEW_VERSION_FROZEN','请在律师审核沟通中补充信息。');
+ if(c.reviews.some(r=>r.status!=='completed'&&!!(r.submittedVersionId||r.editingVersionId)))fail('REVIEW_VERSION_FROZEN','请在律师审核沟通中补充信息。');
  if(activeJob(c))fail('JOB_ACTIVE','当前任务仍在处理，请等待或取消。');
  let phase:'understand'|'generate'='understand';
  if(v.confirmId){if(c.versions.some(version=>version.content?.confirmation?.summaryId===v.confirmId))return c;const i=c.workflow.intake;if(!i||!intakeIsCurrent(c)||i.summaryId!==v.confirmId||i.missing.length||i.conflicts.length)fail('CONFIRMATION_REQUIRED','约定摘要已变化，请重新核对。');const issues=intakeFactIssues(i!);if(issues.length||requiredFields(i!.templateId).some(f=>!hasTransactionFact(i!.facts,f.id)&&!i!.suggestions?.[f.id]))fail('CONFIRMATION_REQUIRED',issues.join('；')||'起草规则已更新，请补充关键交易信息后重新确认。');c.workflow.intake=acceptSuggestions(i!);c.workflow.intake.confirmedAt=now();phase='generate';}
@@ -60,7 +60,7 @@ export async function controlWorkflow(store:WorkflowStore,u:User,id:string,actio
   if(j.phase==='export'){if(!content)fail('JOB_INVALID','生成内容丢失，请重新确认约定。');key=`contracts/${c.id}/${j.versionId}-${lease}.docx`;sha=await store.put(key,content!);}
   const fresh=await store.load(),current=fresh.contract,currentJob=current.workflow?.job;
   if(currentJob?.id!==id||currentJob.lease!==lease||currentJob.status!=='running')return current;
-  if(current.reviews.some(r=>r.status!=='completed'))fail('REVIEW_VERSION_FROZEN','合同已送审，本次起草已停止。');
+  if(current.reviews.some(r=>r.status!=='completed'&&!!(r.submittedVersionId||r.editingVersionId)))fail('REVIEW_VERSION_FROZEN','合同已送审，本次起草已停止。');
   if(intakeResult){if(intakeResult.intake)intakeResult.intake.inputRevision=current.workflow!.inputRevision||0;current.workflow!.intake=intakeResult.intake;current.messages.push({id:crypto.randomUUID(),role:'assistant',content:intakeResult.reply,createdAt:now()});currentJob.status='completed';}
   else if(j.phase==='generate'){currentJob.content=content;currentJob.phase='verify';currentJob.status='pending';}
   else if(j.phase==='verify'){currentJob.phase='export';currentJob.status='pending';}

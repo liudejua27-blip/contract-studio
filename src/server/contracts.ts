@@ -323,7 +323,7 @@ export async function createContract(actor: AuthContext['user'], input: unknown)
 }
 
 async function openReviewExists(contractId: string, client?: PoolClient): Promise<boolean> {
-  const sql = `SELECT 1 FROM reviews WHERE contract_id = $1 AND status IN ('waiting', 'reviewing', 'need_info') LIMIT 1`;
+  const sql = `SELECT 1 FROM reviews WHERE contract_id = $1 AND status IN ('waiting', 'reviewing', 'need_info') AND (submitted_version_id IS NOT NULL OR editing_version_id IS NOT NULL) LIMIT 1`;
   const result = client ? await client.query(sql, [contractId]) : await query(sql, [contractId]);
   return Boolean(result.rows[0]);
 }
@@ -371,7 +371,7 @@ export async function submitReview(actor: AuthContext['user'], contractId: strin
     if (await openReviewExists(contractId, client)) {
       throw new AppError(409, 'An open review already exists for this contract.', 'REVIEW_ALREADY_OPEN');
     }
-    if(!parsed.versionId&&!parsed.consultation)throw new AppError(400,'请选择合同版本或提交需求咨询。','VERSION_REQUIRED');
+    if(!parsed.versionId||parsed.consultation)throw new AppError(400,'请先生成 Word 合同，再提交律师审核。','VERSION_REQUIRED');
     if(!parsed.consultation){
     const version = await client.query<{ id: string; kind: string; content: unknown }>(
       'SELECT id, kind, content FROM versions WHERE id = $1 AND contract_id = $2 LIMIT 1',
@@ -393,12 +393,17 @@ export async function submitReview(actor: AuthContext['user'], contractId: strin
     if(parsed.consultation&&!messages.rows.some(m=>m.role==='user'))throw new AppError(400,'请先描述交易需求。','REQUIREMENTS_REQUIRED');
     const snapshot=await client.query('SELECT workflow FROM contracts WHERE id=$1',[contractId]);
     const requirements = (parsed.consultation?consultationBrief({workflow:snapshot.rows[0]?.workflow}):'')+messages.rows.map((message) => `${message.role === 'user' ? '客户' : '助手'}：${message.content}`).join('\n');
+    const legacy=await client.query("SELECT id FROM reviews WHERE contract_id=$1 AND status IN ('waiting','reviewing','need_info') AND submitted_version_id IS NULL AND editing_version_id IS NULL LIMIT 1",[contractId]);
+    if(legacy.rows[0]){
+      await client.query("UPDATE reviews SET submitted_version_id=$1,status='waiting',stance=$2,concerns=$3,requirements=$4,lawyer_id=COALESCE($5,lawyer_id) WHERE id=$6",[parsed.versionId,parsed.stance,parsed.concerns,requirements,parsed.lawyerId||null,legacy.rows[0].id]);
+    }else{
     await client.query(
       `INSERT INTO reviews
        (id, contract_id, submitted_version_id, status, stance, concerns, requirements, lawyer_id)
        VALUES ($1, $2, $3, 'waiting', $4, $5, $6, $7)`,
       [randomUUID(), contractId, parsed.consultation?null:parsed.versionId, parsed.stance, parsed.concerns, requirements, parsed.lawyerId||null],
     );
+    }
     await client.query('UPDATE contracts SET updated_at = now() WHERE id = $1', [contractId]);
   });
   return requireAccessible(contractId, actor);
@@ -456,6 +461,7 @@ export async function startReview(actor: AuthContext['user'], contractId: string
     if (actor.role !== 'lawyer' || current.lawyerId !== actor.id) {
       throw new AppError(403, 'Only the assigned lawyer can start this review.', 'FORBIDDEN');
     }
+    if(!current.review.submitted_version_id)throw new AppError(409,'请等待客户生成并提交 Word 合同。','VERSION_REQUIRED');
     if (current.review.status === 'reviewing') return;
     if (current.review.status !== 'waiting') {
       throw new AppError(409, 'This review is no longer waiting to start.', 'REVIEW_NOT_STARTABLE');

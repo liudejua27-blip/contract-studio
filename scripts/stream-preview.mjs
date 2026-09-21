@@ -6,6 +6,7 @@ const i=intakeFixture('purchase'),doc=contentFixture('purchase');
 const mf=new Miniflare({name:'contract',port:3217,modules:true,scriptPath:'dist/server/index.js',assets:{workerName:'contract',directory:'dist/client',binding:'ASSETS',assetConfig:{html_handling:'none'},routerConfig:{invoke_user_worker_ahead_of_assets:true,has_user_worker:true}},compatibilityDate:'2026-08-01',compatibilityFlags:['nodejs_compat'],d1Databases:['DB'],r2Buckets:['BUCKET'],bindings:{CONTRACT_AI_API_KEY:'fixture',CONTRACT_AI_BASE_URL:'https://model.test'},outboundService:async request=>{
  const body=await request.json(),prompt=body.messages[0].content;
  const name=prompt.includes('CONTRACT_INTAKE_V2')?'update_contract_spec':prompt.includes('CONTRACT_VERIFY_V2')?'submit_consistency_check':'submit_contract_draft';
+ if(name==='submit_consistency_check')await new Promise(r=>setTimeout(r,2000));
  const user=body.messages.filter(m=>m.role==='user').map(m=>m.content).join('\n');
  const result=name==='update_contract_spec'?{templateId:'purchase',reply:'已收到你的采购需求，我正在整理商品、交货和付款安排。',facts:Object.entries(i.facts).filter(([,f])=>user.includes(f.quote)).map(([fieldId,f])=>({fieldId,...f}))}:name==='submit_consistency_check'?{verdict:'consistent',issues:[]}:doc;
  const args=JSON.stringify({result}),encoder=new TextEncoder();let stopped=false;

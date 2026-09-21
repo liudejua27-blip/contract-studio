@@ -1,3 +1,4 @@
+import {substantiveProblems} from './quality';
 import {GENERAL_FIELDS,hasTransactionFact} from './general';
 import {EXTENDED} from './extended';
 import {CORE_FIELDS} from './guided-policy';
@@ -31,5 +32,5 @@ export function exportProblems(c:import('../types').ContractContent):string[]{
  if(!p)errors.push('该类型尚未开放完整合同生成');
  else {if(p.fields.filter(f=>(CORE_FIELDS[c.confirmation!.templateId]||[]).includes(f.id)).some(f=>!hasTransactionFact(c.confirmation!.facts,f.id)))errors.push('必要约定未齐');if(c.confirmation!.missing.length||c.confirmation!.conflicts.length)errors.push('仍有缺项或冲突');for(const t of p.attachments)if(!c.attachments?.some(a=>a.title===t&&a.content.trim()))errors.push(`缺少附件：${t}`);}
  if(/附件[二三四五六七八九十2-9]/.test(body))errors.push('引用了未登记附件');
- return [...new Set(errors)];
+ return [...new Set([...errors,...substantiveProblems(c)])];
 }

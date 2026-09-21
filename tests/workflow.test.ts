@@ -12,3 +12,7 @@ test('legacy requirement-only review does not lock drafting; real document revie
  const c=await startWorkflow(m.store,u,{requestId:crypto.randomUUID(),message:'继续生成合同'});assert.equal(c.workflow!.job!.status,'pending');assert.equal(c.reviews[0].requirements,'历史需求');
  const n=memory();const other=await n.store.load();other.contract.reviews=[{...snap.contract.reviews[0],submittedVersionId:'word'}];await n.store.save(other.contract,other.revision);await assert.rejects(startWorkflow(n.store,u,{requestId:crypto.randomUUID(),message:'修改'}),/审核沟通/);
 });
+test('quality review notes are persisted through export and reach the saved Word version metadata',async()=>{
+ const old=fetch,m=memory();const snap=await m.store.load();snap.contract.workflow={intake:{...intakeFixture(),confirmedAt:undefined}};await m.store.save(snap.contract,snap.revision);const id=crypto.randomUUID();await startWorkflow(m.store,u,{requestId:id,confirmId:m.get().workflow!.intake!.summaryId});
+ try{globalThis.fetch=async(_url,init)=>Response.json({choices:[{message:{content:JSON.stringify(String(init?.body).includes('CONTRACT_VERIFY_V2')?{verdict:'consistent',issues:[],reviewNotes:['律师核查许可边界']}:contentFixture())}}]});await controlWorkflow(m.store,u,id,'run');await controlWorkflow(m.store,u,id,'run');await controlWorkflow(m.store,u,id,'run');assert.ok(m.get().versions[0].content!.confirmation!.reviewNotes!.includes('律师核查许可边界'));}finally{globalThis.fetch=old}
+});

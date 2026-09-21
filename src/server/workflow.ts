@@ -63,7 +63,7 @@ export async function controlWorkflow(store:WorkflowStore,u:User,id:string,actio
   if(current.reviews.some(r=>r.status!=='completed'&&!!(r.submittedVersionId||r.editingVersionId)))fail('REVIEW_VERSION_FROZEN','合同已送审，本次起草已停止。');
   if(intakeResult){if(intakeResult.intake)intakeResult.intake.inputRevision=current.workflow!.inputRevision||0;current.workflow!.intake=intakeResult.intake;current.messages.push({id:crypto.randomUUID(),role:'assistant',content:intakeResult.reply,createdAt:now()});currentJob.status='completed';}
   else if(j.phase==='generate'){currentJob.content=content;currentJob.phase='verify';currentJob.status='pending';}
-  else if(j.phase==='verify'){currentJob.phase='export';currentJob.status='pending';}
+  else if(j.phase==='verify'){currentJob.content=content;currentJob.phase='export';currentJob.status='pending';}
   else if(content&&key&&sha){if(!current.versions.some(v=>v.id===j.versionId))current.versions.push({id:j.versionId,number:current.versions.length+1,kind:'draft',fileKey:key,content,source:'ai',sha256:sha,createdAt:now()});current.title=content.title;current.messages.push({id:crypto.randomUUID(),role:'assistant',content:'合同 Word 已生成，包含已确认的约定和附件。你可以下载，或提交律师审核。',createdAt:now()});currentJob.status='completed';delete currentJob.content;}
   currentJob.updatedAt=now();delete currentJob.leaseUntil;const result=await store.save(current,fresh.revision);console.info(JSON.stringify({event:'contract_task',job:id,phase:j.phase,result:currentJob.status,elapsedMs:Date.now()-started}));return result;
  }catch(e){

@@ -1,6 +1,8 @@
+import {EXTENDED} from './extended';
 import type {Intake} from '../types';
 export const GUIDED_POLICY_VERSION='guided-2026.09.21.1';
 export const CORE_FIELDS:Record<string,string[]>={software:['partyA','partyB','scope','price','payment','term','deliverables'],service:['partyA','partyB','scope','price','payment','term','deliverables'],purchase:['partyA','partyB','goods','price','payment','term','delivery']};
+for(const [id,p] of Object.entries(EXTENDED))CORE_FIELDS[id]=['partyA','partyB',...p.facts.map(f=>f[0])];
 export const PLAIN_QUESTIONS:Record<string,string>={partyA:'买东西或委托做事的一方，完整名称是什么？',partyB:'卖东西或提供服务的一方，完整名称是什么？',scope:'具体要做哪些东西？可以直接列出你想要的功能或工作。',price:'这次一共多少钱？',payment:'准备怎么付款？例如先付多少，剩下的什么时候付。',term:'准备什么时候开始、什么时候交付？',deliverables:'做完后，对方要交给你哪些东西？',goods:'要买什么、多少件，有没有型号或质量要求？',delivery:'货送到哪里，运费由谁出？'};
 export const PROFESSIONAL_DEFAULTS:Record<string,string>={
  tax:'双方各自依法承担应由其承担的税费，不擅自增加已明确的合同价款。',
@@ -14,7 +16,7 @@ const SCENE_DEFAULTS:Record<string,Record<string,string>>={
  service:{rights:'委托方可为本次约定业务目的使用交付成果。提供方应保密所接触的非公开业务资料，并在履约结束后返还或依法处理，不因交付自动转让全部知识产权。'},
  purchase:{warranty:'商品不符合合同约定的，买方可以依法要求修理、更换、退货或其他适当补救，具体处理与商品问题相适应。'},
 };
-export function defaultsFor(i:Intake){return Object.fromEntries(Object.entries({...PROFESSIONAL_DEFAULTS,...SCENE_DEFAULTS[i.templateId]}).filter(([id])=>!i.facts[id]&&!i.withdrawnFields?.includes(id)));}
+export function defaultsFor(i:Intake){return Object.fromEntries(Object.entries({...Object.fromEntries(Object.entries(PROFESSIONAL_DEFAULTS).filter(([id])=>i.templateId!=='nda'||!['tax','invoice','acceptance','breach'].includes(id))),...SCENE_DEFAULTS[i.templateId],...EXTENDED[i.templateId]?.defaults}).filter(([id])=>!i.facts[id]&&!i.withdrawnFields?.includes(id)));}
 export function effectiveTerms(i:Intake){return {...(i.policyVersion?i.defaults||{}:{}),...Object.fromEntries(Object.entries(i.facts).map(([k,v])=>[k,v.value]))};}
 export function lawyerChecklist(i:Intake){return [...new Set([...(i.reviewNotes||[]),...Object.keys(i.defaults||{}).map(id=>`复核系统起草条款：${id}`),...(i.withdrawnFields||[]).map(id=>`用户撤回了 ${id}，不得沿用旧约定`)])];}
 

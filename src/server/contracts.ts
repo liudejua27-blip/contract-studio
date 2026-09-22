@@ -1,3 +1,5 @@
+import {admitAIJob} from './ai-admission';
+import {reviewVersionProblem} from '../lib/review-policy';
 import {consultationBrief} from '../lib/consultation';
 import {listQuery,summary} from '../lib/contract-list';
 import {startWorkflow,controlWorkflow,type WorkflowStore} from './workflow';
@@ -340,17 +342,25 @@ async function renderAndStore(content: ContractContent, fileKey: string): Promis
   return createHash('sha256').update(bytes).digest('hex');
 }
 
-function workflowStore(actor:User,contractId:string):WorkflowStore{return{
+export function workflowStore(actor:User,contractId:string):WorkflowStore{let admission=false;return{
+ background:true,
+ agentSessions:true,
  load:async()=>{const row=await findAccessibleRow(contractId,actor);if(!row)throw new AppError(404,'合同不存在。','CONTRACT_NOT_FOUND');return{contract:await hydrateContract(row,actor),revision:row.workflow_revision||0}},
  save:async(c,revision)=>{await withTransaction(async client=>{
+ if(admission)await admitAIJob(client,actor.id,contractId);
  const changed=await client.query('UPDATE contracts SET workflow=$1::jsonb,workflow_revision=workflow_revision+1,title=$2,updated_at=now() WHERE id=$3 AND workflow_revision=$4 AND EXISTS(SELECT 1 FROM users WHERE id=$5 AND disabled=false AND role=$6)',[JSON.stringify(c.workflow),c.title,contractId,revision,actor.id,actor.role]);
  if(changed.rowCount!==1)throw new AppError(409,'合同状态已变化，请刷新。','CONFLICT');
  if(await openReviewExists(contractId,client))throw new AppError(409,'合同正在审核。','REVIEW_VERSION_FROZEN');
- for(const m of c.messages)await client.query('INSERT INTO messages(id,contract_id,role,content,created_at) VALUES($1,$2,$3,$4,$5) ON CONFLICT(id) DO NOTHING',[m.id,c.id,m.role,m.content,m.createdAt]);
- for(const v of c.versions)await client.query('INSERT INTO versions(id,contract_id,number,kind,file_key,content,source,sha256,created_at) VALUES($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9) ON CONFLICT(id) DO NOTHING',[v.id,c.id,v.number,v.kind,v.fileKey,JSON.stringify(v.content),v.source,v.sha256,v.createdAt]);
- });return requireAccessible(contractId,actor)},
+ await client.query(`INSERT INTO messages(id,contract_id,role,content,created_at)
+ SELECT x.id,$1,x.role,x.content,x."createdAt" FROM jsonb_to_recordset($2::jsonb) AS x(id text,role text,content text,"createdAt" timestamptz)
+ WHERE NOT EXISTS(SELECT 1 FROM messages m WHERE m.id=x.id) ON CONFLICT(id) DO NOTHING`,[c.id,JSON.stringify(c.messages)]);
+ await client.query(`INSERT INTO versions(id,contract_id,number,kind,file_key,content,source,sha256,created_at)
+ SELECT x.id,$1,x.number,x.kind,x."fileKey",x.content,x.source,x.sha256,x."createdAt" FROM jsonb_to_recordset($2::jsonb) AS x(id text,number int,kind text,"fileKey" text,content jsonb,source text,sha256 text,"createdAt" timestamptz)
+ WHERE NOT EXISTS(SELECT 1 FROM versions v WHERE v.id=x.id) ON CONFLICT(id) DO NOTHING`,[c.id,JSON.stringify(c.versions)]);
+ });admission=false;return requireAccessible(contractId,actor)},
+ isCurrent:async(id,lease)=>{const result=await query(`SELECT 1 FROM contracts c JOIN users u ON u.id=c.owner_id WHERE c.id=$1 AND c.owner_id=$2 AND NOT u.disabled AND u.role='client' AND c.workflow->'job'->>'id'=$3 AND c.workflow->'job'->>'lease'=$4 AND c.workflow->'job'->>'status'='running'`,[contractId,actor.id,id,lease]);return !!result.rowCount;},
  put:async(key,content)=>renderAndStore(content,key),
- limit:async()=>{},
+ limit:async()=>{admission=true;},
 };}
 export async function chatContract(actor:User,contractId:string,input:unknown):Promise<Contract>{return startWorkflow(workflowStore(actor,contractId),actor,input);}
 export async function jobAction(actor:User,contractId:string,jobId:string,action:'run'|'retry'|'cancel',onEvent?:import('../lib/agent-stream').AgentEventSink){return controlWorkflow({...workflowStore(actor,contractId),onEvent},actor,jobId,action);}
@@ -371,17 +381,16 @@ export async function submitReview(actor: AuthContext['user'], contractId: strin
     if (await openReviewExists(contractId, client)) {
       throw new AppError(409, 'An open review already exists for this contract.', 'REVIEW_ALREADY_OPEN');
     }
-    if(!parsed.versionId||parsed.consultation)throw new AppError(400,'请先生成 Word 合同，再提交律师审核。','VERSION_REQUIRED');
+    const snapshot=await client.query('SELECT workflow FROM contracts WHERE id=$1',[contractId]);
     if(!parsed.consultation){
-    const version = await client.query<{ id: string; kind: string; content: unknown }>(
-      'SELECT id, kind, content FROM versions WHERE id = $1 AND contract_id = $2 LIMIT 1',
-      [parsed.versionId, contractId],
-    );
-    if (!version.rows[0]) throw new AppError(404, 'Version not found.', 'VERSION_NOT_FOUND');
-    if (version.rows[0].kind !== 'draft' || !version.rows[0].content) {
-      throw new AppError(409, 'Only an immutable draft version can be submitted for review.', 'VERSION_NOT_SUBMITTABLE');
-    }
-    }
+      const rows=await client.query<VersionRow>('SELECT * FROM versions WHERE contract_id=$1 ORDER BY number ASC',[contractId]);
+      const versions=rows.rows.map(mapVersion),version=versions.find(v=>v.id===parsed.versionId);
+      const problem=reviewVersionProblem({workflow:snapshot.rows[0]?.workflow,versions},version);
+      if(problem)throw new AppError(409,problem.message,problem.code);
+      const bytes=await storage.get(version!.fileKey);
+      if(!bytes||!version!.sha256||createHash('sha256').update(bytes).digest('hex')!==version!.sha256)
+        throw new AppError(503,'合同文件尚未保存完整，请重新生成或上传后再送审。','FILE_NOT_FOUND');
+    }else if(parsed.versionId){throw new AppError(400,'约定协助不提交合同文件，请单独选择合同审核。','INVALID_INPUT');}
     const messages = await client.query<{ role: string; content: string }>(
       'SELECT role, content FROM messages WHERE contract_id = $1 ORDER BY seq ASC',
       [contractId],
@@ -391,11 +400,11 @@ export async function submitReview(actor: AuthContext['user'], contractId: strin
       if(!target.rows[0])throw new AppError(400,'该律师目前无法接收审核，请重新选择。','LAWYER_UNAVAILABLE');
     }
     if(parsed.consultation&&!messages.rows.some(m=>m.role==='user'))throw new AppError(400,'请先描述交易需求。','REQUIREMENTS_REQUIRED');
-    const snapshot=await client.query('SELECT workflow FROM contracts WHERE id=$1',[contractId]);
     const requirements = (parsed.consultation?consultationBrief({workflow:snapshot.rows[0]?.workflow}):'')+messages.rows.map((message) => `${message.role === 'user' ? '客户' : '助手'}：${message.content}`).join('\n');
     const legacy=await client.query("SELECT id FROM reviews WHERE contract_id=$1 AND status IN ('waiting','reviewing','need_info') AND submitted_version_id IS NULL AND editing_version_id IS NULL LIMIT 1",[contractId]);
+    if(legacy.rows[0]&&parsed.consultation)return;
     if(legacy.rows[0]){
-      await client.query("UPDATE reviews SET submitted_version_id=$1,status='waiting',stance=$2,concerns=$3,requirements=$4,lawyer_id=COALESCE($5,lawyer_id) WHERE id=$6",[parsed.versionId,parsed.stance,parsed.concerns,requirements,parsed.lawyerId||null,legacy.rows[0].id]);
+      await client.query("UPDATE reviews SET submitted_version_id=$1,status='waiting',submitted_at=now(),stance=$2,concerns=$3,requirements=$4,lawyer_id=COALESCE($5,lawyer_id) WHERE id=$6",[parsed.versionId,parsed.stance,parsed.concerns,requirements,parsed.lawyerId||null,legacy.rows[0].id]);
     }else{
     await client.query(
       `INSERT INTO reviews
@@ -461,7 +470,6 @@ export async function startReview(actor: AuthContext['user'], contractId: string
     if (actor.role !== 'lawyer' || current.lawyerId !== actor.id) {
       throw new AppError(403, 'Only the assigned lawyer can start this review.', 'FORBIDDEN');
     }
-    if(!current.review.submitted_version_id)throw new AppError(409,'请等待客户生成并提交 Word 合同。','VERSION_REQUIRED');
     if (current.review.status === 'reviewing') return;
     if (current.review.status !== 'waiting') {
       throw new AppError(409, 'This review is no longer waiting to start.', 'REVIEW_NOT_STARTABLE');
@@ -477,7 +485,7 @@ export async function addReviewMessage(actor: AuthContext['user'], contractId: s
     await lockContract(client, contractId);
     const current = await reviewForActor(client, contractId, reviewId);
     if (!canReviewMessage(actor, current)) throw new AppError(403, 'You cannot message this review.', 'FORBIDDEN');
-    if (current.review.status === 'waiting')throw new AppError(409,'请先接收审核任务。','REVIEW_NOT_STARTED');
+    if (current.review.status === 'waiting'&&actor.role==='lawyer')throw new AppError(409,'请先接收审核任务。','REVIEW_NOT_STARTED');
     if (current.review.status === 'completed') throw new AppError(409, 'The delivered review is read-only.', 'REVIEW_COMPLETED');
     if (parsed.requestInfo && (actor.role !== 'lawyer' || current.lawyerId !== actor.id)) {
       throw new AppError(403, 'Only the assigned lawyer can request information.', 'FORBIDDEN');
@@ -516,6 +524,7 @@ export async function uploadReviewVersion(actor: AuthContext['user'], contractId
   const review = await reviewForActor(undefined, contractId, reviewId);
   if (review.lawyerId !== actor.id) throw new AppError(403, 'Only the assigned lawyer can upload a review version.', 'FORBIDDEN');
   if (review.review.status === 'completed') throw new AppError(409, 'The delivered review is read-only.', 'REVIEW_COMPLETED');
+  if(!review.review.submitted_version_id)throw new AppError(409,'请先由客户提交 Word。','VERSION_REQUIRED');
   const versionId = randomUUID();
   const fileKey = `contracts/${contractId}/versions/${versionId}.docx`;
   const sha256 = createHash('sha256').update(file.bytes).digest('hex');
@@ -524,6 +533,7 @@ export async function uploadReviewVersion(actor: AuthContext['user'], contractId
     await lockContract(client, contractId);
     const locked = await reviewForActor(client, contractId, reviewId);
     if (locked.lawyerId !== actor.id) throw new AppError(403, 'Only the assigned lawyer can upload a review version.', 'FORBIDDEN');
+    if(!locked.review.submitted_version_id)throw new AppError(409,'请先由客户提交 Word，约定协助不能直接交付合同。','VERSION_REQUIRED');
     if (locked.review.status === 'waiting')throw new AppError(409,'请先接收审核任务。','REVIEW_NOT_STARTED');
     if (locked.review.status === 'completed') throw new AppError(409, 'The delivered review is read-only.', 'REVIEW_COMPLETED');
     const max = await client.query<{ max: number | null }>('SELECT MAX(number) AS max FROM versions WHERE contract_id = $1', [contractId]);
@@ -1023,7 +1033,13 @@ export async function listContractPage(actor:User,input:unknown){
  const v=listQuery.parse(input),args:unknown[]=[actor.role,actor.id,v.q];
  let where=" WHERE ($1='admin' OR ($1='client' AND c.owner_id=$2) OR ($1='lawyer' AND EXISTS(SELECT 1 FROM reviews r WHERE r.contract_id=c.id AND r.lawyer_id=$2))) AND strpos(lower(c.title),lower($3))>0";
  if(v.filter!=='all')where+=" AND EXISTS(SELECT 1 FROM reviews r WHERE r.contract_id=c.id AND ($1<>'lawyer' OR r.lawyer_id=$2) AND r.status"+(v.filter==='completed'?"='completed'":"<>'completed'")+")";
+ if(v.filter==='completed')where+=" AND NOT EXISTS(SELECT 1 FROM reviews r WHERE r.contract_id=c.id AND ($1<>'lawyer' OR r.lawyer_id=$2) AND r.status<>'completed')";
  const total=await query<{n:string}>('SELECT count(*) AS n FROM contracts c'+where,args);
- const rows=await query<ContractRow>('SELECT c.*,u.name AS owner_name FROM contracts c JOIN users u ON u.id=c.owner_id'+where+' ORDER BY c.updated_at DESC,c.id DESC LIMIT 20 OFFSET $4',[...args,(v.page-1)*20]);
- const items=await Promise.all(rows.rows.map(async r=>summary(await hydrateContract(r,actor))));return{items,page:v.page,total:Number(total.rows[0].n),hasMore:v.page*20<Number(total.rows[0].n)};
+ const rows=await query<ContractRow&{versions:Version[]}>(`SELECT c.id,c.owner_id,u.name AS owner_name,c.title,c.created_at,c.updated_at,
+ jsonb_build_object('job',jsonb_build_object('status',c.workflow->'job'->>'status'),'intake',CASE WHEN c.workflow->'intake' IS NOT NULL THEN jsonb_build_object('confirmedAt',c.workflow->'intake'->'confirmedAt','missing',COALESCE(c.workflow->'intake'->'missing','[]'::jsonb)) ELSE NULL END) AS workflow,
+ COALESCE((SELECT jsonb_agg(v) FROM (SELECT v.id,v.kind,v.source FROM versions v WHERE v.contract_id=c.id AND ($1<>'lawyer' OR EXISTS(SELECT 1 FROM reviews r WHERE r.contract_id=c.id AND r.lawyer_id=$2 AND (r.id=v.review_id OR v.id IN (r.submitted_version_id,r.editing_version_id,r.final_version_id)))) ORDER BY v.number DESC LIMIT 1) v),'[]'::jsonb) AS versions
+ FROM contracts c JOIN users u ON u.id=c.owner_id`+where+' ORDER BY c.updated_at DESC,c.id DESC LIMIT 20 OFFSET $4',[...args,(v.page-1)*20]);
+ const reviews=rows.rows.length?(await query<ReviewRow&{contract_id:string}>(`SELECT id,contract_id,submitted_version_id,editing_version_id,lawyer_id,status,submitted_at,(SELECT name FROM users WHERE id=r.lawyer_id) AS lawyer_name FROM reviews r WHERE contract_id=ANY($1::text[]) AND ($2<>'lawyer' OR lawyer_id=$3)`,[rows.rows.map(r=>r.id),actor.role,actor.id])).rows:[];
+ const items=rows.rows.map(r=>summary(mapContract(r,[],r.versions,reviews.filter(review=>review.contract_id===r.id).map(review=>mapReview(review,[])))));
+ return{items,page:v.page,total:Number(total.rows[0].n),hasMore:v.page*20<Number(total.rows[0].n)};
 }

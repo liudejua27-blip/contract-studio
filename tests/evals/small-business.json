@@ -1,0 +1,156 @@
+[
+  {
+    "id": "plain-purchase",
+    "turns": [
+      "我们测试禾木餐饮公司，跟测试晨光纸品公司买5000个纸杯，250毫升，印我们提供的logo。总共1800块含税，10月10日前送到青岛测试路8号，卖家包运费。先付900，剩下的收货检查数量、图案和有没有漏水，没问题再付。帮我写合同，其他小事按常见方式处理。"
+    ],
+    "noMissing": [
+      "price",
+      "payment",
+      "goods",
+      "delivery"
+    ],
+    "ready": true
+  },
+  {
+    "id": "plain-video",
+    "turns": [
+      "我们测试小满餐饮公司找测试拾光摄影工作室拍店里的宣传视频，一条一分钟的，拍店面和菜品，在我们自己的抖音号发，不投广告。3000块，给我们看成片没问题后付清。10月8日拍，10月12日给MP4高清视频。不需要原始素材。其他细节你按常见方式写。"
+    ],
+    "noMissing": [
+      "price",
+      "payment",
+      "usage",
+      "deliverables",
+      "term"
+    ],
+    "ready": true
+  },
+  {
+    "id": "plain-cleaning",
+    "turns": [
+      "我们测试禾木公司找测试洁净保洁公司打扫办公室，地址青岛测试路8号，100平方米。每周一三五晚上来，扫地拖地、倒垃圾、擦桌子，清洁用品他们带。一个月1200，月底付。2026年10月1日开始，先做三个月。帮我写合同，别的按常见方式处理。"
+    ],
+    "noMissing": [
+      "scope",
+      "price",
+      "payment",
+      "term"
+    ],
+    "ready": true
+  },
+  {
+    "id": "plain-renovation",
+    "turns": [
+      "我们测试小满餐饮公司找测试安居装修公司给店里重新刷墙、换地砖，店在青岛测试路8号，60平方米。总共3万，开工付一半，做完我们看过没问题付另一半，2026年10月1日开工，10月20日做完。合同还缺什么重要的信息？"
+    ],
+    "noMissing": [
+      "price",
+      "payment",
+      "term"
+    ],
+    "missing": "materials"
+  },
+  {
+    "id": "plain-software-three-turns",
+    "turns": [
+      "我们测试金河公司找测试昆丁工作室做公司内部的合同管理系统，要能登录、上传合同、分类、AI审查、提示风险和下载，还有后台管理。总共8万元。",
+      "系统和源码都给我们。9月25号开始，10月25号做完。钱分两次付，怎么分你按常见方式建议。",
+      "可以，签约先付4万，验收后付4万。其他不重要的事按常见方式处理。"
+    ],
+    "noMissing": [
+      "price",
+      "payment",
+      "term",
+      "deliverables",
+      "sourceDelivery"
+    ],
+    "ready": true,
+    "turnExpectations": [
+      {
+        "noMissing": [
+          "price",
+          "scope"
+        ]
+      },
+      {
+        "noMissing": [
+          "term",
+          "deliverables",
+          "sourceDelivery"
+        ],
+        "proposal": "payment"
+      },
+      {
+        "ready": true
+      }
+    ]
+  },
+  {
+    "id": "plain-unknown-cooperation",
+    "turns": [
+      "我是测试禾木咖啡公司，跟测试小满花店合作，我每月给他们员工20杯美式，他们每月来我们店布置两次鲜花。各出各的材料，谁也不收钱。2026年10月到12月，月底对一下用了多少，没用完就作废。帮我把这个写成合同，其他小事按常见方式办。"
+    ],
+    "noMissing": [
+      "price",
+      "payment",
+      "exchange"
+    ]
+  },
+  {
+    "id": "plain-price-revision",
+    "turns": [
+      "我们测试禾木公司找测试小舟设计工作室设计logo，3000块，先付1500，定稿后付1500。2026年10月1日开始、10月20日交，先给三套方案，我们选一个，可以修改两次，最后给图片和能编辑的源文件。其他小事按常见方式写。",
+      "价格改成4000，先付2000，定稿后付2000。其他都不变。"
+    ],
+    "noMissing": [
+      "price",
+      "payment",
+      "term",
+      "deliverables"
+    ],
+    "contains": "4000",
+    "turnExpectations": [
+      {
+        "noMissing": [
+          "price",
+          "payment",
+          "term",
+          "deliverables"
+        ],
+        "noQuestionPatterns": [
+          "超过.{0,10}(?:修改|两次)",
+          "两次修改.{0,10}(?:用完|之外)",
+          "超出.{0,10}(?:次数|两次)"
+        ]
+      },
+      {
+        "noMissing": [
+          "price",
+          "payment",
+          "term",
+          "deliverables"
+        ],
+        "contains": "4000",
+        "noQuestionPatterns": [
+          "超过.{0,10}(?:修改|两次)",
+          "两次修改.{0,10}(?:用完|之外)",
+          "超出.{0,10}(?:次数|两次)"
+        ]
+      }
+    ],
+    "noQuestionPatterns": [
+      "超过.{0,10}(?:修改|两次)",
+      "两次修改.{0,10}(?:用完|之外)",
+      "超出.{0,10}(?:次数|两次)"
+    ]
+  },
+  {
+    "id": "plain-money-conflict",
+    "turns": [
+      "我们测试禾木餐饮公司找测试晨光公司买50把椅子，实木黑色，每把100块，一共3000块，收到检查没问题就付款，2026年10月10日前送到青岛测试路8号，运费卖家出。帮我写合同。"
+    ],
+    "conflict": true,
+    "conflictIncludes": "5000"
+  }
+]

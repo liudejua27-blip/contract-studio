@@ -22,16 +22,19 @@ export function templatePrompt(template:ContractTemplate|undefined,selection:Dra
 export function inspectDraft(content:ContractContent,template:ContractTemplate,reference:string,selection:DraftingReport['selection'],locatedFacts:LocatedFact[]=[]):DraftingReport{
  const fragments=[{location:'签约主体',text:content.parties.map(p=>`${p.role}：${p.name} ${p.details||''}`).join('\n')},...content.sections.map((s,i)=>({location:`第${i+1}条 ${s.title}`,text:s.content})),{location:'签署信息',text:content.signing}];
  const evidence=(keywords:string[])=>{for(const f of fragments){for(const k of keywords){const n=f.text.indexOf(k);if(n>=0)return {location:f.location,quote:f.text.slice(Math.max(0,n-35),n+150)};} }return undefined;};
- const findings:Finding[]=template.fields.map(f=>{
+ const dynamic=content.confirmation?.draftingPlan?.version==='transaction-2';
+ const actualFields=dynamic?Object.keys(content.confirmation!.facts).map(id=>({id,label:template.fields.find(f=>f.id===id)?.label||id,question:''})):template.fields;
+ const findings:Finding[]=actualFields.map(f=>{
   // Only explicitly labelled user answers count as located; no LLM assertions count as confirmed facts.
   const line=reference.split('\n').reverse().find(l=>l.startsWith(`${f.label}：`)||l.startsWith(`${f.label}:`));
   const quoted=locatedFacts.find(x=>x.fieldId===f.id&&x.quote.trim().length>=2&&reference.includes(x.quote));
   const value=line?.slice(f.label.length+1).trim();const known=!!quoted||!!value&&!/待补充|待确认|不确定|未知|未提供/.test(value);
   return{id:`field:${f.id}`,kind:'field',title:f.label,status:known?'REVIEW':'UNKNOWN',message:known?'已定位用户描述的原文，提取结果仍需核实主体、事实与一致性。':`尚未定位到可引用的用户原文，可能尚未说明或未被识别；需要补充后再生成。${f.question}`,...(known?{evidence:{location:'用户提供的信息',quote:(quoted?.quote||line!).slice(0,200)}}:{})};
  });
- for(const c of template.clauses){const e=evidence(c.keywords);findings.push({id:`clause:${c.id}`,kind:'clause',title:c.title,status:e?'REVIEW':'UNKNOWN',message:e?'定位到相关正文，须核对内容是否完整、适用且无矛盾；关键词不代表审查通过。':'未在正文定位到相关关键词，可能缺项或使用了不同表达，请人工核查。',...(e?{evidence:e}:{})});}
+ if(dynamic)for(const [index,section] of content.sections.entries())findings.push({id:'clause:dynamic:'+index,kind:'clause',title:section.title,status:'REVIEW',message:'按交易生成的实际条款；内容完整性和权利义务仍需律师复核。',evidence:{location:section.title,quote:section.content.slice(0,200)}});
+ for(const c of dynamic?[]:template.clauses){const e=evidence(c.keywords);findings.push({id:`clause:${c.id}`,kind:'clause',title:c.title,status:e?'REVIEW':'UNKNOWN',message:e?'定位到相关正文，须核对内容是否完整、适用且无矛盾；关键词不代表审查通过。':'未在正文定位到相关关键词，可能缺项或使用了不同表达，请人工核查。',...(e?{evidence:e}:{})});}
  for(const r of template.risks){const e=evidence(r.keywords);findings.push({id:`risk:${r.id}`,kind:'risk',title:r.title,status:e?'REVIEW':'UNKNOWN',message:r.instruction+(e?' 已定位相关文字，是否构成风险需结合上下文。':' 自动检查未能判定，不代表无风险。'),...(e?{evidence:e}:{})});}
  const e=evidence(['[待补充]','待确认','____','TBD']);findings.push({id:'risk:placeholders',kind:'risk',title:'签署前未决事项',status:'UNKNOWN',message:e||content.missing.length?'仍有未决信息，签署前须补齐。':'未发现标准占位符，但无法自动证明信息齐备。',...(e?{evidence:e}:{})});
- return{templateId:template.id,templateName:template.name,templateVersion:template.version,ruleVersion:LIBRARY_VERSION,createdAt:new Date().toISOString(),reviewStatus:'pending_lawyer_review',jurisdiction:template.jurisdiction,legalBasis:template.legalBasis,selection,sources:template.sourceIds.map(id=>({...SOURCES[id]})),findings};
+ return{templateId:template.id,templateName:dynamic?'交易组合起草':template.name,templateVersion:template.version,ruleVersion:LIBRARY_VERSION,createdAt:new Date().toISOString(),reviewStatus:'pending_lawyer_review',jurisdiction:template.jurisdiction,legalBasis:template.legalBasis,selection,selectionReason:content.confirmation?.draftingPlan?.reason,sources:template.sourceIds.map(id=>({...SOURCES[id]})),findings};
 }
 export function blankTemplate(t:ContractTemplate):ContractContent{const p=PLAYBOOKS[t.id];if(p)return{title:t.name,parties:[{role:'甲方',name:'{{partyA}}',details:'{{contactsA}}'},{role:'乙方',name:'{{partyB}}',details:'{{contactsB}}'}],sections:p.clauses.map(title=>({title,content:'{{已确认的'+title+'}}'})),attachments:p.attachments.map(title=>({title,content:'{{已确认的清单}}'})),signing:'',missing:[]};return{title:t.name,parties:[{role:'甲方',name:'[待补充]',details:'住所、联系人及签署授权：[待补充]'},{role:'乙方',name:'[待补充]',details:'住所、联系人及签署授权：[待补充]'}],sections:t.clauses.map(c=>({title:c.title,content:c.text})),signing:'甲方签署：[待补充]；乙方签署：[待补充]；日期及生效条件：[待补充]。',missing:t.fields.map(f=>f.label)};}

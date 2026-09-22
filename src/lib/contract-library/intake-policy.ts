@@ -10,23 +10,3 @@ export const TERM_SUGGESTIONS:Record<string,string>={
 export function requiredFields(templateId:string){return (PLAYBOOKS[templateId]?.fields||[]).filter(f=>(CORE_FIELDS[templateId]||[]).includes(f.id));}
 export function suggestedTerms(i:Intake):Record<string,IntakeFact>{return Object.fromEntries(Object.entries(i.suggestions||{}).map(([k,value])=>[k,{value,quote:'用户在约定摘要中确认的系统建议'}]));}
 export function acceptSuggestions(i:Intake){const next=structuredClone(i);if(i.policyVersion)return next;next.facts={...suggestedTerms(i),...next.facts};return next;}
-
-/** Explicit installment edits must not keep a stale model extraction. */
-export function paymentEditUnresolved(latest:string,value:string|undefined){
- const match=latest.match(/([两二三四五六七八九十1-9])次(?:付款|支付|付)/);if(!match)return false;
- const n=Number(match[1])||({'两':2,'二':2,'三':3,'四':4,'五':5,'六':6,'七':7,'八':8,'九':9,'十':10} as Record<string,number>)[match[1]];
- if(/(?:比例|金额|节点).{0,5}(?:未定|没想好|未确定|不知道|不确定)/.test(latest))return true;
- if(!value)return true;
- const ratios=[...value.matchAll(/\d+(?:\.\d+)?\s*[%％]/g)].length;
- const amounts=[...value.matchAll(/\d+(?:\.\d+)?\s*(?:万)?元/g)].length;
- return ratios!==n&&amounts!==n;
-}
-
-/** Preserve an explicit standalone installment schedule verbatim, without model paraphrasing. */
-export function explicitPaymentSchedule(text:string):IntakeFact|undefined {
- if(text.length>2500||/(?:改成|改为).{0,12}(?:未定|不确定|没想好)|不要|取消|例如|假设|是否|可以吗|怎么办|[？?]/.test(text))return;
- const lines=text.trim().split(/[；;\n]+/).map(s=>s.trim()).filter(Boolean);
- if(lines.length<2||lines.length>10)return;
- if(!lines.every(s=>/(?:支付|付款|再付|先付)/.test(s)&&/\d[\d,，.]*\s*(?:[%％]|元)/.test(s)&&/(?:后|前|时|首款|尾款|首期|尾期)/.test(s)))return;
- return {value:text.trim(),quote:text.trim()};
-}

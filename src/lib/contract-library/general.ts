@@ -19,8 +19,13 @@ export const MODULES={
  revenue:{title:'收入分配与结算核对',field:'revenue',question:GENERAL_FIELDS[6].question,rule:'明确分配口径、比例及结算周期；不得把销售收入写成利润，不预设成本扣除项目。'},
  operations:{title:'运营分工与费用承担',field:'operations',question:GENERAL_FIELDS[7].question,rule:'按实际分工记录供货、经营和费用，不新增保底收益、独家合作或免费维护。'},
 } as const;
-export type DraftingPlan={version:string;mode:'general'|'specialized';familyId?:string;modules:(keyof typeof MODULES)[];clauses:string[];rules:string[];reason:string};
+export type DraftingPlan={version:string;mode:'general'|'specialized';familyId?:string;ruleFamilies?:string[];modules:(keyof typeof MODULES)[];clauses:string[];rules:string[];reason:string};
 export function selectedModules(i:Intake):(keyof typeof MODULES)[]{
+ if(i.assessmentVersion==='transaction-v1'){
+  // Modern plans follow the agent's sourced decisions; mentioning "没有分成" is not a revenue module.
+  const active=(id:string)=>{const check=i.businessChecks?.find(c=>c.fieldId===id);return check?check.status!=='not_applicable':!!i.facts[id];};
+  return (Object.keys(MODULES) as (keyof typeof MODULES)[]).filter(id=>active(id)||(id==='revenue'&&active('revenueAdjustments')));
+ }
  const text=Object.values(i.facts).map(f=>f.value).join('；');
  const ids:(keyof typeof MODULES)[]=[];
  // Broad transaction evidence selects questions, never supplies their answers.
@@ -30,10 +35,10 @@ export function selectedModules(i:Intake):(keyof typeof MODULES)[]{
  return ids;
 }
 export function draftingPlan(i:Intake,clauses:string[]):DraftingPlan{
- const modules=i.templateId==='general'?selectedModules(i):[];
- return {version:'transaction-1',mode:i.templateId==='general'?'general':'specialized',familyId:i.templateId==='general'?undefined:i.templateId,modules,
+ const modules=selectedModules(i);
+ return {version:'transaction-2',mode:i.templateId==='general'?'general':'specialized',familyId:i.templateId==='general'?undefined:i.templateId,ruleFamilies:[...new Set([i.templateId,...i.ruleFamilies||[]])],modules,
  clauses:[...new Set([...clauses,...modules.map(id=>MODULES[id].title)])],rules:modules.map(id=>MODULES[id].rule),
- reason:i.templateId==='general'?'未采用完整专项模板，根据交易事实组合通用框架与条款模块。':'采用适用的专项规则；用户事实优先，规则仍须律师复核。'};
+ reason:'以已确认交易为依据独立组织条款。clauses仅为参考，可合并、改名或增删；多个适用专项规则按需增强，不限制特殊约定和实际附件。'};
 }
 
 /** Equivalent commercial evidence satisfies the same business question without duplicating facts. */

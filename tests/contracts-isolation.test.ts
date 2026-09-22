@@ -1,3 +1,5 @@
+import {contentFixture} from './fixtures';
+import {startWorkflow} from '../src/server/workflow';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
@@ -5,6 +7,7 @@ import type { ContractContent, User } from '../src/lib/types';
 import {
   assertOnlyOfficeRevisionCurrent,
   chatContract,
+  workflowStore,
   getContractForRoute,
   getOnlyOfficeRevisionState,
   getVersionFile,
@@ -204,7 +207,7 @@ test('one editor session accepts repeated immutable saves and rejects an old cal
   const documentKey = `document-${sessionId}`;
   const scratchFileKey = `scratch-${sessionId}`;
   const lawyer = actor(lawyerId, 'Lawyer', 'lawyer');
-  const content = (title: string): ContractContent => draftContent(title);
+  const content = (title: string): ContractContent => ({...contentFixture(),title});
   const memory = new Map<string, Buffer>();
   const originalPut = storage.put;
   const originalGet = storage.get;
@@ -359,82 +362,22 @@ test('one editor session accepts repeated immutable saves and rejects an old cal
   }
 });
 
-test('an AI chat that started before review submission is rejected when its transaction commits after the freeze', {
+test('a stale workflow snapshot cannot append a message after Word review freezes the contract', {
   skip: !databaseAvailable,
 }, async () => {
-  const suffix = randomUUID();
-  const ownerId = randomUUID();
-  const contractId = randomUUID();
-  const draftId = randomUUID();
-  const owner = actor(ownerId, 'Race Client', 'client');
-  const previousFetch = globalThis.fetch;
-  const previousKey = process.env.CONTRACT_AI_API_KEY;
-  const previousBaseUrl = process.env.CONTRACT_AI_BASE_URL;
-  let resolveStarted!: () => void;
-  let resolveRelease!: () => void;
-  const started = new Promise<void>((resolve) => { resolveStarted = resolve; });
-  const release = new Promise<void>((resolve) => { resolveRelease = resolve; });
-  process.env.CONTRACT_AI_API_KEY = 'concurrency-test-key';
-  process.env.CONTRACT_AI_BASE_URL = 'http://concurrency-test.invalid/v1';
-  globalThis.fetch = async (_url,init) => {
-    if(String(init?.body).includes('CONTRACT_ROUTER_V1'))return Response.json({choices:[{message:{content:JSON.stringify({templateId:null,action:'answer',reason:'测试对话',facts:[]})}}]});
-    resolveStarted();
-    await release;
-    return Response.json({ choices: [{ message: { content: '并发审核已开始，不能再写入起草消息。' } }] });
-  };
-
-  try {
-    await withTransaction(async (client) => {
-      await client.query(
-        `INSERT INTO users (id, name, email, email_normalized, password_hash, role)
-         VALUES ($1, 'Race Client', $2, $2, 'test', 'client')`,
-        [ownerId, `race-client-${suffix}@isolation.test`],
-      );
-      await client.query(
-        'INSERT INTO contracts (id, owner_id, title) VALUES ($1, $2, $3)',
-        [contractId, ownerId, '审核冻结竞态合同'],
-      );
-    });
-
-    const chatPromise = chatContract(owner, contractId, {
-      message: '这条消息在审核开始前发出',
-      mode: 'live',
-      generate: false,
-    });
-    await started;
-    await query(
-      `INSERT INTO versions (id, contract_id, number, kind, file_key, content, source, sha256)
-       VALUES ($1, $2, 1, 'draft', $3, $4::jsonb, 'demo', NULL)`,
-      [draftId, contractId, `contracts/${contractId}/${draftId}.docx`, JSON.stringify(draftContent('竞态草稿'))],
-    );
-    await submitReview(owner, contractId, {
-      versionId: draftId,
-      stance: '请审核',
-      concerns: '',
-    });
-    resolveRelease();
-    await assert.rejects(
-      () => chatPromise,
-      (error: unknown) => (error as { code?: string }).code === 'REVIEW_VERSION_FROZEN',
-    );
-    const messageCount = Number((await query<{ count: string }>(
-      'SELECT count(*)::text AS count FROM messages WHERE contract_id = $1',
-      [contractId],
-    )).rows[0]?.count ?? 0);
-    assert.equal(messageCount, 0, 'the losing chat transaction must not append post-freeze messages');
-  } finally {
-    resolveRelease();
-    globalThis.fetch = previousFetch;
-    if (previousKey === undefined) delete process.env.CONTRACT_AI_API_KEY;
-    else process.env.CONTRACT_AI_API_KEY = previousKey;
-    if (previousBaseUrl === undefined) delete process.env.CONTRACT_AI_BASE_URL;
-    else process.env.CONTRACT_AI_BASE_URL = previousBaseUrl;
-    await withTransaction(async (client) => {
-      await client.query('DELETE FROM messages WHERE contract_id = $1', [contractId]);
-      await client.query('DELETE FROM reviews WHERE contract_id = $1', [contractId]);
-      await client.query('DELETE FROM versions WHERE contract_id = $1', [contractId]);
-      await client.query('DELETE FROM contracts WHERE id = $1', [contractId]);
-      await client.query('DELETE FROM users WHERE id = $1', [ownerId]);
-    });
+  const ownerId=randomUUID(),contractId=randomUUID(),draftId=randomUUID(),owner=actor(ownerId,'Race Client','client');
+  const content=contentFixture(),bytes=Buffer.from(await renderContract(content)),fileKey=`contracts/${contractId}/${draftId}.docx`;
+  try{
+    await query(`INSERT INTO users(id,name,email,email_normalized,password_hash,role) VALUES($1,'Race Client',$2,$2,'test','client')`,[ownerId,owner.email]);
+    await query('INSERT INTO contracts(id,owner_id,title,workflow) VALUES($1,$2,$3,$4::jsonb)',[contractId,ownerId,'审核冻结竞态合同',JSON.stringify({intake:content.confirmation})]);
+    await storage.put(fileKey,bytes);
+    await query(`INSERT INTO versions(id,contract_id,number,kind,file_key,content,source,sha256) VALUES($1,$2,1,'draft',$3,$4::jsonb,'ai',$5)`,[draftId,contractId,fileKey,JSON.stringify(content),createHash('sha256').update(bytes).digest('hex')]);
+    const store=workflowStore(owner,contractId),stale=await store.load();
+    await submitReview(owner,contractId,{versionId:draftId,stance:'甲方'});
+    await assert.rejects(startWorkflow({...store,load:async()=>stale},owner,{requestId:randomUUID(),message:'修改付款'}),(error:any)=>error.code==='REVIEW_VERSION_FROZEN');
+    assert.equal(Number((await query('SELECT count(*) AS n FROM messages WHERE contract_id=$1',[contractId])).rows[0].n),0);
+    const c=await getContractForRoute(owner,contractId);assert.equal(c.workflow?.job,undefined);assert.equal(c.reviews.length,1);
+  }finally{
+    await withTransaction(async client=>{await client.query('DELETE FROM reviews WHERE contract_id=$1',[contractId]);await client.query('DELETE FROM contracts WHERE id=$1',[contractId]);await client.query('DELETE FROM users WHERE id=$1',[ownerId]);});
   }
 });

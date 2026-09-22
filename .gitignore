@@ -14,3 +14,7 @@ dist/
 .sites-runtime/
 .dev.vars
 .DS_Store
+
+# Local browser captures and generated review artifacts
+.playwright-cli/
+output/

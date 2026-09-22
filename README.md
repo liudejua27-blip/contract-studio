@@ -60,3 +60,7 @@ HTTP smoke 创建独立测试合同，检查角色隔离、真实 DOCX 下载、
 - `docs/ACCEPTANCE.md`：完整需求验收状态。
 
 ONLYOFFICE Document Server 的 AGPL/商业集成授权需要按最终商业部署方式确认；React 组件授权不能替代服务端授权。未完成真实模型、律师质量评估和部署验收前，不应作为已上线服务宣传。
+
+当前模型配置（2026-09-22）：本地完整 Pi SDK 与 Sites 兼容构建默认使用 `deepseek-flash`，需求理解、起草、核对共用此配置，不自动升级或回退到 Pro。部署时显式设置的 `CONTRACT_AI_MODEL` 优先于代码默认值；本次配置修改尚未部署。
+
+所有模型阶段默认启用 Flash Thinking `high`（`CONTRACT_AI_THINKING=enabled`、`CONTRACT_AI_REASONING_EFFORT=high`），包括需求理解。Pi 推理档位映射到 DeepSeek 请求参数，工具循环保留服务端思考内容，不向用户展示隐藏推理。

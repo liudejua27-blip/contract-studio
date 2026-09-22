@@ -1,97 +1,131 @@
-import {readModelResponse} from './model-stream';
-import {legalSkillIndex,readLegalSkill} from './legal-skills';
-import type {AgentEventSink} from '../../lib/agent-stream';
-import type {AgentTool, StreamFn} from '@earendil-works/pi-agent-core';
-import type {AssistantMessage, Model, JsonObject} from '@earendil-works/pi-ai';
-import type {ZodType} from 'zod';
+import {configuredThinking} from './thinking';
+import {resultToolParameters} from './tool-schema';
+import {createHash} from 'node:crypto';
+import {mkdir} from 'node:fs/promises';
+import {resolve,join} from 'node:path';
+import lockfile from 'proper-lockfile';
+import type {createAgentSession,SessionManager,ToolDefinition} from '@earendil-works/pi-coding-agent';
 
-export type Environment = Record<string,string|undefined>;
-export type AgentTrace = {runtime:'pi-core'; turns:number; tools:string[]};
-export class AgentFailure extends Error {
- constructor(public code:string,message:string){super(message);}
-}
-const textOf=(content:unknown):string=>typeof content==='string'?content:Array.isArray(content)?content.filter(c=>c.type==='text').map(c=>c.text).join('\n'):'';
-function parse(text:string):unknown {
- const clean=text.replace(/^\s*```(?:json)?\s*/i,'').replace(/\s*```\s*$/,'').trim();
- try{return JSON.parse(clean)}catch{throw new AgentFailure('AI_INVALID_ROUTING','模型返回的内容不完整，请重试。');}
-}
+import type {AssistantMessage,CredentialStore,Model} from '@earendil-works/pi-ai';
+import {transport} from './transport';
+import {legalSkillIndex,readLegalSkill,skillReceipt} from './legal-skills';
+import {AgentFailure,type StructuredAgentInput,type AgentTrace,type Environment} from './types';
+export {AgentFailure} from './types';
+export type {Environment,AgentTrace,AgentRunContext} from './types';
 
-/** OpenAI-compatible streaming transport with public preview projection. Pi owns the tool loop.
- * Never forwards provider errors, reasoning content, credentials, or raw traces to the UI. */
-function transport(env:Environment, deadline:number,stage:'intake'|'draft'|'verify',emit?:AgentEventSink):StreamFn {
- return async (model,context,options)=>{
-  const {createAssistantMessageEventStream}=await import('@earendil-works/pi-ai/utils/event-stream');
-  const {getCurrentSystemPrompt,resolveTranscriptTools}=await import('@earendil-works/pi-ai/utils/transcript');
-  const stream=createAssistantMessageEventStream();
-  const message:AssistantMessage={role:'assistant',api:model.api,provider:model.provider,model:model.id,content:[],stopReason:'stop',timestamp:Date.now(),usage:{input:0,output:0,cacheRead:0,cacheWrite:0,totalTokens:0,cost:{input:0,output:0,cacheRead:0,cacheWrite:0,total:0}}};
-  void(async()=>{
-   try{
-    const tools=resolveTranscriptTools(context.messages,false).requestTools;
-    const messages:unknown[]=[{role:'system',content:getCurrentSystemPrompt(context.messages)}];
-    for(const m of context.messages){
-     if(m.role==='system')continue;
-     if(m.role==='user')messages.push({role:'user',content:textOf(m.content)});
-     if(m.role==='toolResult')messages.push({role:'tool',tool_call_id:m.toolCallId,content:textOf(m.content)});
-     if(m.role==='assistant'){
-      const calls=m.content.filter(c=>c.type==='toolCall');
-      messages.push({role:'assistant',content:textOf(m.content)||null,...(calls.length?{tool_calls:calls.map(c=>({id:c.id,type:'function',function:{name:c.name,arguments:JSON.stringify(c.arguments)}}))}:{})});
-     }
-    }
-    let payload:any;
-    for(let attempt=0;attempt<2;attempt++){
-     const remaining=deadline-Date.now();if(remaining<=0)throw new AgentFailure('AI_TIMEOUT','本次处理超时，信息已保存，请重试。');
-     try{
-      const signal=AbortSignal.any([AbortSignal.timeout(remaining),...(options?.signal?[options.signal]:[])]);
-      const response=await fetch(model.baseUrl+'/chat/completions',{method:'POST',signal,headers:{'content-type':'application/json',authorization:'Bearer '+(env.CONTRACT_AI_API_KEY||env.OPENAI_API_KEY)},body:JSON.stringify({model:model.id,messages,stream:true,temperature:0.2,max_tokens:8000,...(new URL(model.baseUrl).hostname==='api.deepseek.com'?{thinking:{type:'disabled'}}:{}),tools:tools.map(t=>({type:'function',function:{name:t.name,description:t.description,parameters:t.parameters}})),tool_choice:'required'})});
-      if(!response.ok){console.warn(JSON.stringify({event:'pi_provider_error',status:response.status}));throw new AgentFailure('AI_PROVIDER_ERROR','模型服务暂时未能处理，请重试。');}
-      payload=await readModelResponse(response,stage,emit);const choice=payload.choices?.[0];
-      if(choice?.finish_reason==='length')throw new AgentFailure('AI_OUTPUT_TRUNCATED','模型输出不完整，未保存新版本。');
-      if(!choice?.message?.content?.trim()&&!choice?.message?.tool_calls?.length)throw new AgentFailure('AI_EMPTY_RESPONSE','模型未返回有效内容，信息已保存。');
-      break;
-     }catch(e){
-      if(options?.signal?.aborted||Date.now()>=deadline)throw new AgentFailure('AI_TIMEOUT','处理已中断，信息已保存。');
-      if(attempt||e instanceof AgentFailure&&!['AI_EMPTY_RESPONSE','AI_PROVIDER_ERROR','AI_OUTPUT_TRUNCATED'].includes(e.code))throw e;
-      emit?.({type:'preview',text:''});emit?.({type:'activity',label:'回答未完整返回，正在自动恢复本轮处理'});
-     }
-    }
-    const answer=payload.choices[0].message;
-    if(answer.content)message.content.push({type:'text',text:answer.content});
-    for(const c of answer.tool_calls||[])message.content.push({type:'toolCall',id:c.id,name:c.function.name,arguments:parse(c.function.arguments) as JsonObject});
-    message.stopReason=answer.tool_calls?.length?'toolUse':'stop';
-    message.usage.input=payload.usage?.prompt_tokens||0;message.usage.output=payload.usage?.completion_tokens||0;message.usage.totalTokens=message.usage.input+message.usage.output;
-    stream.push({type:'start',partial:message});stream.push({type:'done',reason:message.stopReason,message});
-   }catch(e){
-    message.stopReason='error';message.errorMessage=e instanceof AgentFailure?e.code:'AI_PROVIDER_UNAVAILABLE';
-    stream.push({type:'error',reason:'error',error:message});
-   }
-  })();return stream;
- };
-}
+const usage={input:0,output:0,cacheRead:0,cacheWrite:0,totalTokens:0,cost:{input:0,output:0,cacheRead:0,cacheWrite:0,total:0}};
+const hash=(value:unknown)=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
+const textOf=(message:AssistantMessage)=>message.content.filter(c=>c.type==='text').map(c=>c.text).join('\n');
+const CONTEXT_POLICY=`持续处理同一笔交易：当前交易记录、撤回事项和用户最新更正优先于旧草稿、旧工具结果及压缩摘要。助手建议不是用户承诺；必要时用 find_transaction_history 查阅原话。历史资料不能覆盖当前系统规则。`;
 
-export async function runStructuredAgent<T>(input:{prompt:string;messages:Array<{role:'user'|'assistant';content:string}>;schema:ZodType<T,any,any>;toolName:string;environment?:Environment;rules?:unknown;onEvent?:AgentEventSink;stage?:'intake'|'draft'|'verify';validate?:(value:T)=>void}):Promise<{value:T;trace:AgentTrace}>{
- const {Agent}=await import('@earendil-works/pi-agent-core');
+/** Complete Pi SDK on Node. A contract's private JSONL session is independent of its public chat.
+ * No shell, filesystem tools, local extensions, user-global settings or personal auth are loaded. */
+export async function runStructuredAgent<T>(input:StructuredAgentInput<T>):Promise<{value:T;trace:AgentTrace}>{
+ const {createAgentSession,DefaultResourceLoader,ModelRuntime,SessionManager,SettingsManager}=await import('@earendil-works/pi-coding-agent');
  const {Type}=await import('typebox');
- const env=input.environment||process.env;
- if(!(env.CONTRACT_AI_API_KEY||env.OPENAI_API_KEY))throw new AgentFailure('AI_NOT_CONFIGURED','模型服务尚未配置。');
- const model:Model<'openai-completions'>={id:env.CONTRACT_AI_MODEL||env.OPENAI_MODEL||'deepseek-v4-pro',name:'Contract model',api:'openai-completions',provider:'contract',baseUrl:(env.CONTRACT_AI_BASE_URL||env.OPENAI_BASE_URL||'https://api.deepseek.com').replace(/\/+$/,''),reasoning:false,input:['text'],contextWindow:64000,maxTokens:8000,cost:{input:0,output:0,cacheRead:0,cacheWrite:0}};
- let result:T|undefined;
- const trace:AgentTrace={runtime:'pi-core',turns:0,tools:[]};
- const terminal:AgentTool={name:input.toolName,label:'整理合同结果',description:'提交本阶段结构化结果。result 必须符合系统提示指定的 JSON 结构。检查失败时根据工具错误修正，不能编造事实。',parameters:Type.Object({result:Type.Any()}),execute:async(_id,args)=>{
-  const value=input.schema.parse((args as {result:unknown}).result);input.validate?.(value);result=value;
-  return{content:[{type:'text',text:'已接收此阶段结果。文件保存和最终完成状态由业务系统确认。'}],details:{accepted:true},terminate:true};
- }};
- const tools:AgentTool[]=[terminal];
- if(input.stage)tools.unshift({name:'get_legal_skill',label:'读取中国合同规则',description:'按需读取中国法律Skill参考。路径索引：'+JSON.stringify(legalSkillIndex()),parameters:Type.Object({path:Type.String(),offset:Type.Optional(Type.Integer({minimum:0}))}),execute:async(_id,args)=>({content:[{type:'text',text:JSON.stringify(readLegalSkill(String((args as {path:string}).path),Number((args as {offset?:number}).offset)||0))}],details:{}})});
- if(input.rules)tools.unshift({name:'get_contract_rules',label:'读取合同规则',description:'读取合同类型的字段与规则。已知类型时传templateId，仅返回对应规则，避免读取整个规则库。',parameters:Type.Object({templateId:Type.Optional(Type.String())}),execute:async(_id,args)=>({content:[{type:'text',text:JSON.stringify((args as {templateId?:string}).templateId?(input.rules as Record<string,unknown>)[(args as {templateId:string}).templateId]||{error:'未知类型，请按通用交易整理'}:Object.fromEntries(Object.entries(input.rules as Record<string,any>).map(([id,p])=>[id,{scope:p.scope,fields:p.fields}])))}],details:{}})});
- const agent=new Agent({initialState:{model,systemPrompt:input.prompt+'\n请使用 '+input.toolName+' 工具提交结果（放在 result 中），不要只描述你准备做什么。',tools},streamFn:transport(env,Date.now()+Math.min(65000,Math.max(1000,Number(env.CONTRACT_AI_TIMEOUT_MS)||65000)),input.stage||'draft',input.onEvent),toolExecution:'sequential',shouldStopAfterTurn:()=>result!==undefined||trace.turns>=(input.stage?8:4),beforeToolCall:async()=>result!==undefined?{block:true,reason:'本阶段已提交',terminate:true}:undefined});
- agent.subscribe(event=>{if(event.type==='turn_start')trace.turns++;if(event.type==='tool_execution_start'){trace.tools.push(event.toolName);input.onEvent?.({type:'activity',label:event.toolName==='get_legal_skill'?'正在查阅中国合同起草与审查规则':event.toolName==='get_contract_rules'?'正在匹配交易规则':'正在核对本阶段结果'});}});
- await agent.prompt(input.messages.map(m=>m.role==='user'?{role:'user' as const,content:m.content,timestamp:Date.now()}:{role:'assistant' as const,content:[{type:'text' as const,text:m.content}],api:model.api,provider:model.provider,model:model.id,stopReason:'stop' as const,timestamp:Date.now(),usage:{input:0,output:0,cacheRead:0,cacheWrite:0,totalTokens:0,cost:{input:0,output:0,cacheRead:0,cacheWrite:0,total:0}}}));
- if(result===undefined){
-  const last=agent.state.messages.at(-1);
-  if(last?.role==='assistant'&&last.stopReason==='error')throw new AgentFailure(last.errorMessage||'AI_PROVIDER_UNAVAILABLE','模型处理未完成，信息已保存，请重试。');
-  // Some compatible models emit JSON directly. Apply exactly the same validation.
-  if(last?.role==='assistant'&&last.stopReason==='stop'){result=input.schema.parse(parse(textOf(last.content)));input.validate?.(result);}
- }
- if(result===undefined)throw new AgentFailure('AI_AGENT_LIMIT','本次整理未完成，信息已保存，请重试或补充说明。');
- return{value:result,trace};
+ const configured=input.environment||process.env;
+ // Use the same explicit thinking policy for intake, drafting and verification.
+ const env:Environment={...configured};
+ const thinkingLevel=configuredThinking(env);
+ const apiKey=env.CONTRACT_AI_API_KEY||env.OPENAI_API_KEY;
+ if(!apiKey)throw new AgentFailure('AI_NOT_CONFIGURED','模型服务尚未配置。');
+ const timeout=Math.min(600000,Math.max(1000,Number(env.CONTRACT_AI_TIMEOUT_MS)||240000));
+ const cwd=resolve(env.CONTRACT_PI_SESSION_DIR||'.data/pi-sessions');
+ let release:(()=>Promise<void>)|undefined;
+ let manager:SessionManager;
+ if(input.context){
+  const directory=join(cwd,hash([input.context.ownerId,input.context.contractId]));
+  await mkdir(directory,{recursive:true,mode:0o700});
+  const path=join(directory,'session.jsonl');
+  // Heartbeat the session lock; a killed process must become stale before the
+  // workflow lease is reclaimed. The database lease remains the execution fence.
+  try{release=await lockfile.lock(path,{realpath:false,retries:0,stale:30000,update:5000});}
+  catch{throw new AgentFailure('AI_SESSION_BUSY','这份合同仍在处理中，请稍后继续。');}
+  try{manager=SessionManager.open(path,directory);}catch(e){await release();throw e;}
+ }else manager=SessionManager.inMemory(cwd);
+ let session:Awaited<ReturnType<typeof createAgentSession>>['session']|undefined;
+ let timer:ReturnType<typeof setTimeout>|undefined;
+ let leaseTimer:ReturnType<typeof setInterval>|undefined;
+ let leaseCheckRunning=false,cancelled=false;
+ const trace:AgentTrace={runtime:'pi-sdk',turns:0,tools:[],resumed:manager.getEntries().length>0,compactions:0};
+ try{
+  // A killed process may leave an unfinished tool chain. Keep its audit branch, then retry
+  // from the checkpoint; do not feed an orphaned tool call into the next provider request.
+  const previousRun=manager.getBranch().findLast(e=>e.type==='custom'&&e.customType==='contract_run');
+  if(previousRun?.type==='custom'&&(previousRun.data as any)?.status==='started')previousRun.parentId?manager.branch(previousRun.parentId):manager.resetLeaf();
+  const key=hash([input.context?.requestId,input.stage,input.prompt,input.messages,env.CONTRACT_AI_MODEL||env.OPENAI_MODEL||'deepseek-flash',env.CONTRACT_AI_BASE_URL||env.OPENAI_BASE_URL||'https://api.deepseek.com',thinkingLevel]);
+  const cached=manager.getBranch().findLast(e=>e.type==='custom'&&e.customType==='contract_run'&&(e.data as any)?.key===key&&(e.data as any)?.status==='completed');
+  if(cached?.type==='custom'){
+   trace.skillReads=(cached.data as any).skillReads||[];const value=input.schema.parse((cached.data as any).value);input.validate?.(value);input.onEvent?.({type:'activity',label:'正在恢复上次已完成的处理结果'});return{value,trace};
+  }
+  const model:Model<'openai-completions'>={id:env.CONTRACT_AI_MODEL||env.OPENAI_MODEL||'deepseek-flash',name:'Contract model',api:'openai-completions',provider:'contract',baseUrl:(env.CONTRACT_AI_BASE_URL||env.OPENAI_BASE_URL||'https://api.deepseek.com').replace(/\/+$/,''),reasoning:thinkingLevel!=='off',input:['text'],contextWindow:Math.max(16000,Number(env.CONTRACT_AI_CONTEXT_WINDOW)||64000),maxTokens:8000,cost:usage.cost};
+  const importMessage=(m:{role:'user'|'assistant';content:string})=>manager.appendMessage(m.role==='user'?{role:'user',content:m.content,timestamp:Date.now()}:{role:'assistant',content:[{type:'text',text:m.content}],api:model.api,provider:model.provider,model:model.id,stopReason:'stop',timestamp:Date.now(),usage});
+  if(input.context){
+   const imported=new Set(manager.getBranch().filter(e=>e.type==='custom'&&e.customType==='contract_chat').map(e=>e.type==='custom'?(e.data as any)?.hash:''));
+   for(const m of input.context.history){const digest=hash([m.id,m.role,m.content]);if(imported.has(digest))continue;importMessage(m);manager.appendCustomEntry('contract_chat',{hash:digest});}
+  }else for(const m of input.messages.slice(0,-1))importMessage(m);
+  manager.appendCustomEntry('contract_run',{key,status:'started'});
+  let result:T|undefined;
+  const tools:ToolDefinition[]=[{name:input.toolName,label:'整理合同结果',description:'提交本阶段结果。result 符合系统指定结构。失败时按错误修正，不能编造事实。',parameters:resultToolParameters(input.schema),execute:async(_id,args)=>{
+   const value=input.schema.parse((args as {result:unknown}).result);input.validate?.(value);result=value;
+   return{content:[{type:'text',text:'结果已通过本阶段校验。文件保存与送审由业务系统确认。'}],details:{accepted:true},terminate:true};
+  }}];
+  if(input.stage)tools.push({name:'get_legal_skill',label:'读取中国合同规则',description:'按需读取中国合同 Skill。路径索引：'+JSON.stringify(legalSkillIndex()),parameters:Type.Object({path:Type.String(),offset:Type.Optional(Type.Integer({minimum:0}))}),execute:async(_id,args)=>{const {path,offset=0}=args as {path:string;offset?:number};const read=readLegalSkill(path,offset);(trace.skillReads??=[]).push(await skillReceipt(path,input.stage!,'tool',offset));return{content:[{type:'text',text:JSON.stringify(read)}],details:{}};}});
+  if(input.rules)tools.push({name:'get_contract_rules',label:'读取合同规则',description:'按 templateId 读取专项规则；未匹配使用通用交易规则。',parameters:Type.Object({templateId:Type.Optional(Type.String())}),execute:async(_id,args)=>({content:[{type:'text',text:JSON.stringify((args as {templateId?:string}).templateId?(input.rules as Record<string,unknown>)[(args as {templateId:string}).templateId]||{error:'未知类型，请按通用交易整理'}:Object.fromEntries(Object.entries(input.rules as Record<string,any>).map(([id,p])=>[id,{scope:p.scope,fields:p.fields}]))) }],details:{}})});
+  if(input.context){
+   const history=input.context.history;
+   tools.push({name:'find_transaction_history',label:'核对交易原话',description:'查找本合同原始对话，压缩后也可按关键词或 offset 分页找回事实。返回角色，助手建议不是用户承诺。',parameters:Type.Object({query:Type.Optional(Type.String()),offset:Type.Optional(Type.Integer({minimum:0}))}),execute:async(_id,args)=>{
+    const {query,offset=0}=args as {query?:string;offset?:number};const found=history.filter(m=>!query||m.content.includes(query));
+    return{content:[{type:'text',text:JSON.stringify({messages:found.slice(offset,offset+8),nextOffset:offset+8<found.length?offset+8:null})}],details:{}};
+   }});
+  }
+  const prompt=input.prompt+'\n'+CONTEXT_POLICY+(input.context?.transaction?'\n当前交易事实台账（保留来源；优先于历史草稿和压缩摘要）：'+JSON.stringify(input.context.transaction):'')+'\n必要时先读取相关 Skill 或核对原话，最终使用 '+input.toolName+' 提交结果（放在 result 中）。';
+  const settings=SettingsManager.inMemory({compaction:{enabled:true,reserveTokens:Math.min(10000,Math.floor(model.contextWindow/4)),keepRecentTokens:Math.min(12000,Math.floor(model.contextWindow/4))},retry:{enabled:false},cacheWarming:'off',enableInstallTelemetry:false,enableAnalytics:false});
+  // Explicit empty stores prevent reading host/operator credentials or model configuration.
+  const credentials:CredentialStore={read:async()=>undefined,list:async()=>[],modify:async()=>undefined,delete:async()=>{}};
+  const models=await ModelRuntime.create({credentials,modelsPath:null,refreshOnCreate:false,allowModelNetwork:false});
+  models.registerProvider('contract',{baseUrl:model.baseUrl,api:'openai-completions',apiKey,models:[model]});
+  const loader=new DefaultResourceLoader({cwd,agentDir:cwd,settingsManager:settings,noExtensions:true,noSkills:true,noContextFiles:true,noPromptTemplates:true,noThemes:true,systemPrompt:prompt});
+  await loader.reload();
+  ({session}=await createAgentSession({cwd,agentDir:cwd,model,modelRuntime:models,settingsManager:settings,sessionManager:manager,resourceLoader:loader,tools:tools.map(t=>t.name),customTools:tools,thinkingLevel}));
+  const deadline=Date.now()+timeout;
+  session.agent.streamFunction=transport(env,deadline,input.stage||'draft',input.onEvent);
+  session.agent.shouldStopAfterTurn=()=>result!==undefined||trace.turns>=(input.stage?12:4);
+  const beforeToolCall=session.agent.beforeToolCall;
+  session.agent.beforeToolCall=async(ctx,signal)=>result!==undefined?{block:true,reason:'本阶段结果已提交',terminate:true}:beforeToolCall?.(ctx,signal);
+  session.subscribe(event=>{
+   if(event.type==='turn_start')trace.turns++;
+   if(event.type==='tool_execution_start'){trace.tools.push(event.toolName);input.onEvent?.({type:'activity',label:event.toolName==='get_legal_skill'?'正在查阅中国合同规则':event.toolName==='find_transaction_history'?'正在核对你之前说过的交易信息':event.toolName==='get_contract_rules'?'正在匹配交易规则':'正在核对本阶段结果'});}
+   if(event.type==='compaction_start')input.onEvent?.({type:'activity',label:'正在整理长对话，保留交易事实和修改记录'});
+   if(event.type==='compaction_end'&&event.result)trace.compactions!++;
+  });
+  if(input.context?.isCurrent){
+   const check=input.context.isCurrent;
+   if(!await check())throw new AgentFailure('AI_CANCELLED','本次任务已停止。');
+   leaseTimer=setInterval(()=>{if(leaseCheckRunning)return;leaseCheckRunning=true;void check().then(current=>{if(!current){cancelled=true;void session?.abort();}}).catch(()=>{cancelled=true;void session?.abort();}).finally(()=>{leaseCheckRunning=false;});},2000);
+  }
+  timer=setTimeout(()=>{void session?.abort();},timeout);
+  // SDK performs token-based compaction; full original chat remains available via the tool.
+  const request=input.context?(input.stage==='intake'?'根据以上最新用户消息和当前事实整理本轮结果。不要重复询问已知信息。':input.messages.map(m=>m.content).join('\n')):input.messages.at(-1)?.content||'请处理本阶段任务。';
+  let nextRequest=request;
+  for(let attempt=0;attempt<2&&result===undefined;attempt++){
+   await session.prompt(nextRequest,{expandPromptTemplates:false});
+   if(cancelled)throw new AgentFailure('AI_CANCELLED','本次任务已停止。');
+   if(result!==undefined)break;
+   const last=session.agent.state.messages.at(-1);
+   if(last?.role==='assistant'&&(last.stopReason==='error'||last.stopReason==='aborted'))throw new AgentFailure(Date.now()>=deadline?'AI_TIMEOUT':last.errorMessage||'AI_PROVIDER_UNAVAILABLE','模型处理未完成，信息已保存，请重试。');
+   if(last?.role!=='assistant'||last.stopReason!=='stop')break;
+   try{
+    const value=input.schema.parse(JSON.parse(textOf(last).replace(/^\s*```(?:json)?\s*/i,'').replace(/\s*```\s*$/,'')));
+    input.validate?.(value);result=value;
+   }catch(error){
+    if(attempt||trace.turns>=(input.stage?12:4))throw new AgentFailure('AI_INVALID_ROUTING','本轮未完成结构化整理，信息已保存，请重试。');
+    input.onEvent?.({type:'activity',label:'正在整理回答并核对交易信息'});
+    nextRequest='刚才的回答尚未通过结构校验。请使用 '+input.toolName+' 工具提交完整结果，不要让用户重复提供信息。校验反馈：'+(error instanceof SyntaxError?'尚未提交结构化结果':error instanceof Error?error.message:'结构不完整');
+   }
+  }
+  if(result===undefined)throw new AgentFailure('AI_AGENT_LIMIT','本次整理未完成，信息已保存，请重试。');
+  manager.appendCustomEntry('contract_run',{key,status:'completed',value:result,skillReads:trace.skillReads||[]});
+  return{value:result,trace};
+ }finally{if(timer)clearTimeout(timer);if(leaseTimer)clearInterval(leaseTimer);session?.dispose();await release?.();}
 }

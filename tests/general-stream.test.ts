@@ -1,3 +1,4 @@
+import {intakeFixture} from './fixtures';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {collectIntake,draftConfirmed} from '../src/server/ai';
@@ -14,10 +15,10 @@ const intake=():Intake=>({templateId:'general',facts:structuredClone(facts),miss
 const call=(name:string,result:unknown)=>Response.json({choices:[{finish_reason:'tool_calls',message:{tool_calls:[{id:'call',type:'function',function:{name,arguments:JSON.stringify({result})}}]}}]});
 function response(frames:unknown[]){const bytes=new TextEncoder().encode(frames.map(f=>'data: '+JSON.stringify(f)+'\r\n\r\n').join('')+'data: [DONE]\r\n\r\n');return new Response(new ReadableStream({start(c){for(let i=0;i<bytes.length;i+=7)c.enqueue(bytes.slice(i,i+7));c.close();}}),{headers:{'content-type':'text/event-stream'}});}
 test('unknown-family transaction asks material business questions and preserves lawyer notes across family changes',async()=>{
- const old=fetch;try{globalThis.fetch=async()=>call('update_contract_spec',{templateId:'general',facts:Object.entries(facts).filter(([id])=>!['equipment','revenue','operations'].includes(id)).map(([fieldId,f])=>({fieldId,...f}))});
+ const old=fetch;try{globalThis.fetch=async()=>call('update_contract_spec',{templateId:'general',businessChecks:['equipment','operations','collection','settlement','revenueAdjustments'].map(fieldId=>({fieldId,status:'missing',evidence:[],question:'请说明'+fieldId+'的安排？'})),facts:Object.entries(facts).filter(([id])=>!['equipment','revenue','operations'].includes(id)).map(([fieldId,f])=>({fieldId,...f}))});
  const previous={...intake(),templateId:'service',facts:{specialTerms:{value:'不做独家合作',quote:'不做独家合作'}},reviewNotes:['合作终止安排请律师重点审查']};
  const r=await collectIntake([{id:'m',role:'user',content:Object.values(values).join('；'),createdAt:''}],previous,env);
- assert.equal(r.intake!.templateId,'general');assert.deepEqual(r.intake!.missing,['equipment','revenue','operations']);assert.equal(r.intake!.facts.specialTerms.value,'不做独家合作');assert.ok(r.intake!.reviewNotes!.includes('合作终止安排请律师重点审查'));assert.doesNotMatch(r.reply,/管辖|法律适用/);assert.ok((r.reply.match(/\d\./g)||[]).length<=3);
+ assert.equal(r.intake!.templateId,'general');assert.deepEqual(r.intake!.missing,['equipment','operations','collection','settlement','revenueAdjustments']);assert.equal(r.intake!.facts.specialTerms.value,'不做独家合作');assert.ok(r.intake!.reviewNotes!.includes('合作终止安排请律师重点审查'));assert.doesNotMatch(r.reply,/管辖|法律适用/);assert.ok((r.reply.match(/\d\./g)||[]).length<=3);
  }finally{globalThis.fetch=old}
 });
 test('general coffee transaction reaches validated Word with provenance and dynamic clauses',async()=>{
@@ -38,17 +39,17 @@ test('skill is pinned, available in all stages, paths cannot escape the allowlis
 });
 test('revenue terms satisfy commercial exchange and invalid quotation is corrected inside the Agent',async()=>{
  const old=fetch;let n=0;const entries=Object.entries(facts).filter(([id])=>id!=='exchange').map(([fieldId,f])=>({fieldId,...f}));
- try{globalThis.fetch=async(_url,init)=>{n++;if(n===1)return call('update_contract_spec',{templateId:'general',facts:[{fieldId:'partyA',value:values.partyA,quote:'模型改写的不存在原文'}]});assert.ok(JSON.parse(String(init?.body)).messages.some((m:any)=>m.role==='tool'&&m.content.includes('逐字复制')));return call('update_contract_spec',{templateId:'general',facts:entries});};
- const r=await collectIntake([{id:'m',role:'user',content:Object.values(values).join('；'),createdAt:''}],undefined,env);assert.equal(n,2);assert.deepEqual(r.intake!.missing,[]);assert.equal(r.intake!.facts.exchange,undefined);assert.equal(r.intake!.facts.revenue.value,values.revenue);
+ try{globalThis.fetch=async(_url,init)=>{n++;if(n===1)return call('update_contract_spec',{templateId:'general',facts:[{fieldId:'partyA',value:values.partyA,quote:'模型改写的不存在原文'}]});assert.ok(JSON.parse(String(init?.body)).messages.some((m:any)=>m.role==='tool'&&m.content.includes('逐字复制')));return call('update_contract_spec',{templateId:'general',facts:entries,businessChecks:['collection','settlement','revenueAdjustments'].map(fieldId=>({fieldId,status:'missing',evidence:[],question:'请说明'+fieldId+'的安排？'}))});};
+ const r=await collectIntake([{id:'m',role:'user',content:Object.values(values).join('；'),createdAt:''}],undefined,env);assert.equal(n,2);assert.deepEqual(r.intake!.missing,['collection','settlement','revenueAdjustments']);assert.equal(r.intake!.facts.exchange,undefined);assert.equal(r.intake!.facts.revenue.value,values.revenue);
  }finally{globalThis.fetch=old}
 });
-test('unresolved routing retains previous facts and lawyer notes but invalidates confirmation',async()=>{
- const old=fetch;try{globalThis.fetch=async()=>call('update_contract_spec',{templateId:null,facts:[],reviewNotes:['需要专项核对']});const i=intake();i.reviewNotes=['已有待审事项'];const r=await collectIntake([{id:'m',role:'user',content:'现在交易结构需要调整',createdAt:''}],i,env);assert.deepEqual(r.intake!.facts,i.facts);assert.equal(r.intake!.confirmedAt,undefined);assert.ok(r.intake!.conflicts.length);assert.deepEqual(r.intake!.reviewNotes,['已有待审事项','需要专项核对']);}finally{globalThis.fetch=old}
+test('unknown routing falls back to general, preserves facts and lawyer notes, and invalidates confirmation',async()=>{
+ const old=fetch;try{globalThis.fetch=async()=>call('update_contract_spec',{templateId:null,facts:[],reviewNotes:['需要专项核对']});const i=intake();i.reviewNotes=['已有待审事项'];const r=await collectIntake([{id:'m',role:'user',content:'现在交易结构需要调整',createdAt:''}],i,env);assert.deepEqual(r.intake!.facts,i.facts);assert.equal(r.intake!.confirmedAt,undefined);assert.equal(r.intake!.templateId,'general');assert.deepEqual(r.intake!.conflicts,[]);assert.ok(r.intake!.reviewNotes!.includes('已有待审事项'));assert.ok(r.intake!.reviewNotes!.includes('需要专项核对'));}finally{globalThis.fetch=old}
 });
 test('common handling proposes payment once, retains proposal, and explicit adoption records its source',async()=>{
  const old=fetch;try{
- const previous:Intake={templateId:'software',facts:{},missing:['payment'],conflicts:[],summaryId:crypto.randomUUID()};
- globalThis.fetch=async()=>call('update_contract_spec',{templateId:'software',facts:[]});
+ const previous=intakeFixture();delete previous.facts.payment;previous.missing=['payment'];
+ globalThis.fetch=async()=>call('update_contract_spec',{templateId:'software',facts:[],businessProposals:[{fieldId:'payment',value:'签约后支付50%，验收后支付50%。'}]});
  const msg=(content:string)=>({id:crypto.randomUUID(),role:'user' as const,content,createdAt:''});
  const first=await collectIntake([msg('按常见方式处理')],previous,env);
  assert.equal(first.intake!.businessProposals!.length,1);assert.equal(first.intake!.businessProposals![0].fieldId,'payment');assert.ok(!first.intake!.facts.payment);assert.doesNotMatch(first.reply,/准备怎么付款/);
@@ -65,20 +66,21 @@ test('stream flushes its last visible characters even inside throttle window',as
 test('interrupted provider response is retried without exposing an unfinished reply as saved',async()=>{
  const old=fetch;let calls=0;const events:any[]=[];
  try{globalThis.fetch=async()=>{calls++;if(calls===1)return response([{choices:[{delta:{content:'{"reply":"未完成'}}]}]);return call('update_contract_spec',{templateId:'software',facts:[]});};
- const result=await collectIntake([{id:'m',role:'user',content:'我要开发软件',createdAt:''}],undefined,env,e=>events.push(e));
+ const result=await collectIntake([{id:'m',role:'user',content:'我要开发软件',createdAt:''}],intakeFixture(),env,e=>events.push(e));
  assert.equal(calls,2);assert.ok(result.intake);assert.ok(events.some(e=>e.type==='activity'&&e.label.includes('自动恢复')));assert.doesNotMatch(result.reply,/未完成/);
  }finally{globalThis.fetch=old}
 });
 test('known source delivery and month/day dates are retained despite model rewriting; two installments still need a proposal',async()=>{
  const old=fetch;try{
+ const previous=intakeFixture();previous.facts.price={value:'8万元',quote:'8万元'};delete previous.facts.deliverables;
  const term='项目从9月25号开始，10月25号完成',source='软件做完后，源代码需要一起交付',payment='这8万元打算分2次付';
- globalThis.fetch=async()=>call('update_contract_spec',{templateId:'software',facts:[{fieldId:'term',value:'2026年9月25日开始，2026年10月25日完成',quote:term},{fieldId:'sourceDelivery',value:source,quote:source},{fieldId:'payment',value:payment,quote:payment}]});
- const r=await collectIntake([{id:'m',role:'user',content:source+'。'+payment+'.付款方式按照常见方式处理。'+term,createdAt:''}],undefined,env);
- assert.equal(r.intake!.facts.term.value,term);assert.equal(r.intake!.facts.deliverables.value,source);assert.equal(r.intake!.facts.payment,undefined);assert.ok(r.intake!.businessProposals!.some(p=>p.fieldId==='payment'));assert.doesNotMatch(r.reply,/什么时候开始|交给你哪些/);
+ globalThis.fetch=async()=>call('update_contract_spec',{templateId:'software',facts:[{fieldId:'term',value:'2026年9月25日开始，2026年10月25日完成',quote:term},{fieldId:'sourceDelivery',value:source,quote:source},{fieldId:'payment',value:payment,quote:payment}],businessProposals:[{fieldId:'payment',value:'签约后支付50%，验收后支付50%。'}]});
+ const r=await collectIntake([{id:'m',role:'user',content:source+'。'+payment+'.付款方式按照常见方式处理。'+term,createdAt:''}],previous,env);
+ assert.equal(r.intake!.facts.term.value,term);assert.equal(r.intake!.facts.sourceDelivery.value,source);assert.equal(r.intake!.facts.payment.value,payment);assert.ok(r.intake!.missing.includes('payment'));assert.ok(r.intake!.businessProposals!.some(p=>p.fieldId==='payment'));assert.doesNotMatch(r.reply,/什么时候开始|交给你哪些/);
  }finally{globalThis.fetch=old}
 });
 test('refusing source delivery is not converted into an affirmative deliverable',async()=>{
- const old=fetch;try{globalThis.fetch=async()=>call('update_contract_spec',{templateId:'software',facts:[{fieldId:'sourceDelivery',value:'不提供源码',quote:'不提供源码'}]});const r=await collectIntake([{id:'m',role:'user',content:'不提供源码',createdAt:''}],undefined,env);assert.equal(r.intake!.facts.deliverables,undefined);}finally{globalThis.fetch=old}
+ const old=fetch;const previous=intakeFixture();delete previous.facts.deliverables;try{globalThis.fetch=async()=>call('update_contract_spec',{templateId:'software',facts:[{fieldId:'sourceDelivery',value:'不提供源码',quote:'不提供源码'}]});const r=await collectIntake([{id:'m',role:'user',content:'不提供源码',createdAt:''}],previous,env);assert.equal(r.intake!.facts.deliverables,undefined);}finally{globalThis.fetch=old}
 });
 test('explicitly accepting the last missing proposal preserves known facts without another model call',async()=>{
  const {intakeFixture}=await import('./fixtures');const previous=intakeFixture('software');delete previous.facts.payment;delete previous.confirmedAt;previous.missing=['payment'];previous.businessProposals=[{id:'proposal',fieldId:'payment',value:'签署后支付50%，验收后支付50%'}];const known=structuredClone(previous.facts),old=fetch;

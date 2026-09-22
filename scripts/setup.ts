@@ -38,6 +38,9 @@ CREATE TABLE IF NOT EXISTS contracts (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 ALTER TABLE contracts ADD COLUMN IF NOT EXISTS workflow jsonb;
+ALTER TABLE contracts ADD COLUMN IF NOT EXISTS agent_progress jsonb;
+CREATE INDEX IF NOT EXISTS contracts_active_jobs_idx ON contracts(updated_at,id)
+  WHERE workflow->'job'->>'status' IN ('pending','running');
 ALTER TABLE contracts ADD COLUMN IF NOT EXISTS workflow_revision integer NOT NULL DEFAULT 0;
 CREATE INDEX IF NOT EXISTS contracts_owner_updated_idx ON contracts(owner_id, updated_at DESC);
 

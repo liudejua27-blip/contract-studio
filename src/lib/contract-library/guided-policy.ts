@@ -1,3 +1,4 @@
+import {TRANSACTION_QUESTIONS} from '../contract-questions';
 import {unresolvedBusiness,businessCheckProblems} from '../business-checks';
 import {GENERAL_CORE,MODULES,selectedModules} from './general';
 import {EXTENDED} from './extended';
@@ -12,7 +13,7 @@ export const BUSINESS_FIELDS=[
 ];
 export const CORE_FIELDS:Record<string,string[]>={general:GENERAL_CORE,software:['partyA','partyB','scope','price','payment','term','deliverables'],service:['partyA','partyB','scope','price','payment','term','deliverables'],purchase:['partyA','partyB','goods','price','payment','term','delivery']};
 for(const [id,p] of Object.entries(EXTENDED))CORE_FIELDS[id]=['partyA','partyB',...p.facts.map(f=>f[0])];
-export const PLAIN_QUESTIONS:Record<string,string>={partyA:'买东西或委托做事的一方，完整名称是什么？',partyB:'卖东西或提供服务的一方，完整名称是什么？',scope:'具体要做哪些东西？可以直接列出你想要的功能或工作。',price:'这次一共多少钱？',payment:'准备怎么付款？例如先付多少，剩下的什么时候付。',term:'准备什么时候开始、什么时候交付？',deliverables:'做完后，对方要交给你哪些东西？',goods:'要买什么、多少件，有没有型号或质量要求？',delivery:'货送到哪里，运费由谁出？'};
+export const PLAIN_QUESTIONS=TRANSACTION_QUESTIONS;
 const SCENE_DEFAULTS:Record<string,Record<string,string>>={
  software:{ip:'甲方可为本合同约定的业务目的使用交付成果；源码及修改需求以交付清单明确的约定为准。已有代码及第三方组件依其权利和许可证使用，本合同不因交付行为自动转让全部知识产权。',maintenance:'乙方应修复交付成果中不符合本合同约定的缺陷。新增功能不属于原工作范围，应经双方书面确认。项目资料和约定账号应随交付移交，双方依法保护业务数据。'},
  service:{rights:'委托方可为本次约定业务目的使用交付成果。提供方应保密所接触的非公开业务资料，并在履约结束后返还或依法处理，不因交付自动转让全部知识产权。'},

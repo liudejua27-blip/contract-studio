@@ -72,3 +72,20 @@ test('PATCH user route applies CSRF before authentication and callback caps body
   assert.equal((await callbackResponse.json()).code, 'REQUEST_TOO_LARGE');
 });
 
+
+test('body reader limits actual chunks without trusting Content-Length', async () => {
+  const {readRequestBytes}=await import('../src/server/http-security');
+  for(const declared of [undefined,'1']){
+    let cancelled=false;
+    const stream=new ReadableStream<Uint8Array>({pull(controller){controller.enqueue(new Uint8Array(700));},cancel(){cancelled=true;}});
+    const request=new Request('http://localhost/',{method:'POST',body:stream,duplex:'half',headers:declared?{'content-length':declared}:{}} as RequestInit);
+    await assert.rejects(readRequestBytes(request,1024),(e:unknown)=>e instanceof AppError&&e.status===413);
+    assert.equal(cancelled,true);
+  }
+});
+test('login and editor callback reject actual oversized bodies before database/auth', async()=>{
+  for(const path of [['auth','login'],['onlyoffice','callback']]){
+    const response=await POST(new Request('http://127.0.0.1:3210/api/'+path.join('/'),{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({text:'x'.repeat(2*1024*1024)})}),context(path));
+    assert.equal(response.status,413);
+  }
+});

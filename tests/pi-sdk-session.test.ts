@@ -1,3 +1,4 @@
+import {createTaskBudget,reserveBudgetCall,settleBudgetCall} from '../src/lib/task-budget';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtemp,rm,readdir,readFile} from 'node:fs/promises';
@@ -18,7 +19,7 @@ const input=(environment:Record<string,string>,context:AgentRunContext)=>({promp
 test('full SDK resumes a private session, imports old messages once, caches accepted retries and isolates owners',async()=>fixture(async(dir,env)=>{
  const history=[message('源码需要交付；9月25日开始，10月25日完成。')];
  const context={ownerId:'owner-a',contractId:'same-contract',requestId:'r1',history};let calls=0;
- globalThis.fetch=async(_url,init)=>{calls++;const body=JSON.parse(String(init?.body));assert.equal(body.tool_choice,'auto');assert.deepEqual(body.tools.map((t:any)=>t.function.name).sort(),['find_transaction_history','get_legal_skill','save_result']);return call('save_result',{result:{ok:true}})};
+ globalThis.fetch=async(_url,init)=>{calls++;const body=JSON.parse(String(init?.body));assert.equal(body.tool_choice,'auto');assert.deepEqual(body.tools.map((t:any)=>t.function.name).sort(),['find_transaction_history','get_legal_skill','read_legal_source','save_result','search_legal_sources']);return call('save_result',{result:{ok:true}})};
  const first=await runStructuredAgent(input(env,context));assert.equal(first.trace.runtime,'pi-sdk');assert.equal(first.trace.resumed,false);
  const retry=await runStructuredAgent(input(env,context));assert.equal(retry.trace.resumed,true);assert.equal(calls,1);
  const longer=[...history,...Array.from({length:30},(_,i)=>message('业务补充 '+i)),message('金额改为90000元，其他约定不变')];
@@ -50,7 +51,8 @@ test('two simultaneous runs cannot write the same contract session',async()=>fix
 test('SDK compaction preserves access to original quotes and the latest fact ledger',async()=>fixture(async(dir,env)=>{
  const old=message('最初金额为80000元。');const history=[old,...Array.from({length:75},(_,i)=>message('背景材料'+i+'。'.repeat(1000))),message('最新更正：金额改为90000元。')];
  const transaction=intakeFixture();transaction.facts.price={value:'90000元',quote:'金额改为90000元'};
- const context={ownerId:'a',contractId:'b',requestId:'r1',history,transaction};let compacted=0,lookedUp=false;
+ const ledger=createTaskBudget({CONTRACT_TASK_MAX_TOKENS:'2000000'});
+ const context={ownerId:'a',contractId:'b',requestId:'r1',history,transaction,budget:{reserve:async(i:number,o:number)=>reserveBudgetCall(ledger,i,o),settle:async(r:import('../src/lib/task-budget').CallReservation,c:import('../src/lib/task-budget').BudgetCall)=>settleBudgetCall(ledger,r,c)}};let compacted=0,lookedUp=false;
  globalThis.fetch=async(_url,init)=>{
   const b=JSON.parse(String(init?.body));
   if(!b.tools?.length){compacted++;return Response.json({choices:[{finish_reason:'stop',message:{content:'早期记录提到80000元；存在后续更正，当前台账为准。'}}]});}
@@ -59,7 +61,7 @@ test('SDK compaction preserves access to original quotes and the latest fact led
   assert.ok(b.messages.some((m:any)=>m.role==='tool'&&m.content.includes(old.content)));return call('save_result',{result:{ok:true}});
  };
  const result=await runStructuredAgent(input({...env,CONTRACT_AI_CONTEXT_WINDOW:'16000'},context));
- assert.ok(compacted>0);assert.ok(result.trace.compactions!>0);assert.ok(lookedUp);
+ assert.ok(compacted>0);assert.ok(result.trace.compactions!>0);assert.ok(lookedUp);assert.equal(ledger.calls,compacted+2);assert.equal(ledger.unknownCalls,ledger.calls);assert.equal(ledger.pending,undefined);
  const [d]=await readdir(dir);const text=await readFile(join(dir,d,'session.jsonl'),'utf8');assert.match(text,/"type":"compaction"/);assert.ok(text.includes(old.content));
 }));
 
@@ -96,4 +98,26 @@ test('intake and drafting default to high thinking while explicit off remains re
  await runStructuredAgent({...input({...env,CONTRACT_AI_THINKING:'off'},{...context,requestId:'explicit'})});
  for(const request of seen.slice(0,2)){assert.deepEqual(request.thinking,{type:'enabled'});assert.equal(request.reasoning_effort,'high');}assert.deepEqual(seen[2].thinking,{type:'disabled'});assert.equal(seen[2].reasoning_effort,undefined);
  assert.ok(seen[2].messages.filter((m:any)=>m.role==='assistant'&&m.tool_calls?.length).every((m:any)=>typeof m.reasoning_content==='string'));
+}));
+
+test('database checkpoints carry an SDK session to a different private working directory',async()=>fixture(async(dir,environment)=>{
+ let checkpoint:string|null=null,calls=0;
+ const shared={load:async()=>checkpoint,save:async(value:string)=>{checkpoint=value;}};
+ const context={ownerId:'shared-owner',contractId:'shared-contract',requestId:'one',history:[message('首轮已约定交付源码')],checkpoint:shared,isCurrent:async()=>true};
+ globalThis.fetch=async()=>{calls++;return call('save_result',{result:{ok:true}})};
+ const first=await runStructuredAgent(input({...environment,CONTRACT_PI_SESSION_DIR:join(dir,'host-a')},context));assert.equal(first.trace.resumed,false);
+ const second=await runStructuredAgent(input({...environment,CONTRACT_PI_SESSION_DIR:join(dir,'host-b')},context));assert.equal(second.trace.resumed,true);assert.equal(calls,1);
+ assert.deepEqual(await readdir(join(dir,'host-a')),[]);assert.deepEqual(await readdir(join(dir,'host-b')),[]);
+ globalThis.fetch=async(_url,init)=>{const body=JSON.parse(String(init?.body));assert.ok(body.messages.some((m:any)=>m.content==='首轮已约定交付源码'));return call('save_result',{result:{ok:true}})};
+ await runStructuredAgent(input({...environment,CONTRACT_PI_SESSION_DIR:join(dir,'host-b')},{...context,requestId:'two',history:[message('补充交付时间')]}));
+ assert.ok(String(checkpoint).includes('补充交付时间'));assert.ok(!String(checkpoint).includes('test-only'));
+}));
+
+test('latest stage transaction overrides stale session context and invalidates a cached result',async()=>fixture(async(_dir,env)=>{
+ const stale=intakeFixture(),current=structuredClone(stale);stale.facts.scope={value:'旧范围标记',quote:'旧范围标记'};current.facts.scope={value:'新范围标记',quote:'新范围标记'};
+ const context={ownerId:'handoff',contractId:'same-contract',requestId:'same-request',history:[],transaction:stale};let calls=0;
+ globalThis.fetch=async(_url,init)=>{calls++;const body=JSON.parse(String(init?.body));const system=body.messages[0].content;assert.equal(system.includes('新范围标记'),calls===2);return call('save_result',{result:{ok:true}})};
+ await runStructuredAgent({...input(env,context),transaction:stale});
+ await runStructuredAgent({...input(env,context),transaction:current});
+ assert.equal(calls,2);
 }));

@@ -7,3 +7,8 @@ export function resultToolParameters(schema:ZodTypeAny):TSchema {
  const {$schema,...parameters}=zodToJsonSchema(z.object({result:schema}),{$refStrategy:'none',effectStrategy:'input',removeAdditionalStrategy:'strict'});
  return parameters as TSchema;
 }
+
+export function argumentParameters(schema:ZodTypeAny):TSchema {
+ const {$schema,...parameters}=zodToJsonSchema(schema,{$refStrategy:'none',effectStrategy:'input',removeAdditionalStrategy:'strict'});
+ return parameters as TSchema;
+}

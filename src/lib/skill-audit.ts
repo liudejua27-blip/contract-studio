@@ -9,7 +9,7 @@ export interface SkillAudit {
  version:1; contentSha256:string; receipts:SkillReceipt[];
  applications:(RuleApplication & {receiptId?:string;status:'located'|'unverified';reason?:string})[];
  // A model consistency check is not legal review or proof of every application.
- consistency?:{contentSha256:string;status:'consistent';checkedAt:string};
+ consistency?:{contentSha256:string;status:'consistent'|'needs_lawyer';checkedAt:string};
 }
 export function documentBody(c:{title:string;parties:unknown;sections:unknown;attachments?:unknown;signing:string;documentProfile?:string}){
  // PostgreSQL JSONB reorders object keys. A stable digest must survive persistence.

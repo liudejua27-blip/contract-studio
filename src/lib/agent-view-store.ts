@@ -14,7 +14,7 @@ export function createAgentViewStore(){
   subscribe(id:string,fn:()=>void){const set=listeners.get(id)||new Set();set.add(fn);listeners.set(id,set);return()=>{set.delete(fn);if(!set.size)listeners.delete(id);};},
   begin(id:string,job:GenerationJob){
    const old=views.get(id),same=old?.jobId===job.id;
-   const label=phaseLabels[job.phase];const token=++sequence;tokens.set(id,token);
+   const label=job.status==='pending'&&job.execution==='background'?'任务已保存，正在排队处理；离开页面也会继续':phaseLabels[job.phase];const token=++sequence;tokens.set(id,token);
    publish(id,{jobId:job.id,phase:job.phase,status:'running',label,text:same?old.text:'',activities:same?[...old.activities.filter(x=>x!==label),label].slice(-8):[label],createdAt:job.createdAt});return token;
   },
   event(id:string,token:number,event:AgentStreamEvent){

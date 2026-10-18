@@ -7,6 +7,7 @@ export interface BusinessCheck {
  status:'answered'|'missing'|'deferred'|'not_applicable'|'standard';
  defaultRule?:StandardRuleId;
  evidence:string[];
+ evidenceFactIds?:string[];
  question?:string;
  reason?:string;
  label?:string;

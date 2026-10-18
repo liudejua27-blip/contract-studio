@@ -22,6 +22,8 @@ export interface OnlyOfficeTokenPayload extends JWTPayload {
   role: OnlyOfficeRole;
   /** The session account that requested the editor config. */
   userId?: string;
+  /** Website login session; revoking it also revokes document and callback URLs. */
+  authSessionId?: string;
   /** Server-side editor session binding. */
   sessionId: string;
 }
@@ -58,6 +60,7 @@ export interface CreateEditorConfigInput {
   sourceFileKey?: string;
   role?: OnlyOfficeRole;
   userId?: string;
+  authSessionId?: string;
   userName?: string;
   title?: string;
   baseUrl?: string;
@@ -138,12 +141,15 @@ export interface PersistOnlyOfficeRevisionInput {
   status: 2 | 6;
   sessionId: string;
   userId?: string;
+  authSessionId?: string;
   /** Force-save nonce/epoch or other signed callback userdata. */
   userData?: unknown;
 }
 
 export interface OnlyOfficeCallbackDependencies extends OnlyOfficeOptions {
   persistRevision: (input: PersistOnlyOfficeRevisionInput) => Promise<void>;
+  assertAccess?: (claims: OnlyOfficeTokenPayload) => Promise<void>;
+  reportSaveFailure?: (claims: OnlyOfficeTokenPayload, body: OnlyOfficeCallbackBody) => Promise<void>;
   /** A backend may reject a stale callback after reading its current DB row. */
   assertRevisionCurrent?: (input: Pick<PersistOnlyOfficeRevisionInput, 'reviewId' | 'versionId' | 'revision' | 'sessionId'>) => Promise<void>;
   /**
@@ -343,8 +349,9 @@ export async function createEditorConfig(
   const callbackPath = input.callbackPath ?? options.callbackPath ?? '/api/onlyoffice/callback';
   const callbackBaseUrl = input.callbackBaseUrl ? validatedOrigin(input.callbackBaseUrl, 'OnlyOffice callback base URL', options.allowPrivateHosts) : baseUrl;
   const sessionId = requireIdentifier(input.sessionId, 'sessionId');
-  const documentToken = await signToken({ purpose: 'document', scope: 'contract-document-read', reviewId, versionId, revision, inputSourceFileKey: sourceFileKey, fileKey, documentKey, role, sessionId, ...(input.userId ? { userId: input.userId } : {}) }, options);
-  const callbackToken = await signToken({ purpose: 'callback', scope: 'contract-document-callback', reviewId, versionId, revision, inputSourceFileKey: sourceFileKey, fileKey, documentKey, role, sessionId, ...(input.userId ? { userId: input.userId } : {}) }, options);
+  const identity = { ...(input.userId ? { userId: input.userId } : {}), ...(input.authSessionId ? { authSessionId: input.authSessionId } : {}) };
+  const documentToken = await signToken({ purpose: 'document', scope: 'contract-document-read', reviewId, versionId, revision, inputSourceFileKey: sourceFileKey, fileKey, documentKey, role, sessionId, ...identity }, options);
+  const callbackToken = await signToken({ purpose: 'callback', scope: 'contract-document-callback', reviewId, versionId, revision, inputSourceFileKey: sourceFileKey, fileKey, documentKey, role, sessionId, ...identity }, options);
   const title = (input.title?.trim() || `合同-${versionId}`).slice(0, 180);
   const documentUrl = `${pathJoin(baseUrl, documentPath)}?token=${encodeURIComponent(documentToken)}`;
   const callbackUrl = `${pathJoin(callbackBaseUrl, callbackPath)}?token=${encodeURIComponent(callbackToken)}`;
@@ -600,12 +607,16 @@ export async function handleOnlyOfficeCallback(
       { headers: request.headers, body: request.body },
       { secret: dependencies.secret, issuer: dependencies.issuer, audience: dependencies.audience, expectedKey: claims.documentKey },
     );
+    if (dependencies.assertAccess) await dependencies.assertAccess(claims);
     const effectiveBody = { ...verifiedBody.payload } as OnlyOfficeCallbackBody;
     delete effectiveBody.token;
     const status = Number(effectiveBody.status);
     if (!Number.isInteger(status)) return callbackError('OnlyOffice callback status is missing');
     if (status === 1 || status === 4) return { error: 0, ignored: true, status };
-    if (status === 3 || status === 7) return callbackError('OnlyOffice reported a save error; existing version was preserved', status);
+    if (status === 3 || status === 7) {
+      if (dependencies.reportSaveFailure) await dependencies.reportSaveFailure(claims, effectiveBody);
+      return callbackError('OnlyOffice reported a save error; existing version was preserved', status);
+    }
     if (status !== 2 && status !== 6) return callbackError('OnlyOffice callback status is unsupported', status);
     if (claims.role !== 'edit') return callbackError('OnlyOffice view tokens cannot save a document', status);
     if (effectiveBody.key && effectiveBody.key !== claims.documentKey) return callbackError('OnlyOffice document key does not match callback token', status);
@@ -618,6 +629,7 @@ export async function handleOnlyOfficeCallback(
       revision: claims.revision,
       sessionId: claims.sessionId,
       userId: claims.userId,
+      authSessionId: claims.authSessionId,
       sourceFileKey,
       fileKey: immutableCallbackFileKey(sourceFileKey, claims.revision, downloaded.sha256),
       bytes: downloaded.bytes,

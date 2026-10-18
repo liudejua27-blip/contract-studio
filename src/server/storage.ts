@@ -1,14 +1,16 @@
 import {
-  GetObjectCommand,
+  GetObjectCommand, ListObjectsV2Command, DeleteObjectCommand,
   PutObjectCommand,
   S3Client,
   type S3ClientConfig,
 } from '@aws-sdk/client-s3';
 import { createHash, randomUUID } from 'node:crypto';
-import { lstat, mkdir, open, readFile, rename, rm } from 'node:fs/promises';
+import { lstat, mkdir, open, readFile, rename, rm, readdir } from 'node:fs/promises';
 import { dirname, isAbsolute, join, posix, relative, resolve, sep } from 'node:path';
 
 export interface StorageAdapter {
+  list?(): AsyncIterable<{key:string;modified:Date}>;
+  delete?(key:string): Promise<void>;
   put(fileKey: string, bytes: Buffer, contentType?: string): Promise<void>;
   get(fileKey: string): Promise<Buffer | null>;
 }
@@ -190,6 +192,22 @@ export class PrivateFileSystemStorage implements StorageAdapter {
     }
   }
 
+  async delete(key:string):Promise<void>{
+    const target=this.pathFor(key);await assertNoSymlinkPath(this.rootDir,dirname(target));
+    try{const item=await lstat(target);if(item.isSymbolicLink()||!item.isFile())throw new StorageKeyError('Not a regular object');await rm(target);}catch(e){if((e as NodeJS.ErrnoException).code!=='ENOENT')throw e;}
+  }
+  async *list():AsyncIterable<{key:string;modified:Date}>{
+    const root=this.rootDir;
+    await assertNoSymlinkPath(root,root);
+    async function* walk(dir:string):AsyncIterable<{key:string;modified:Date}>{
+      let items;try{items=await readdir(dir,{withFileTypes:true});}catch(e){if((e as NodeJS.ErrnoException).code==='ENOENT')return;throw e;}
+      for(const item of items){if(item.isSymbolicLink())throw new StorageKeyError('Symlink in private storage');const path=join(dir,item.name);
+        if(item.isDirectory())yield* walk(path);else if(item.isFile())yield{key:relative(root,path).split(sep).join('/'),modified:(await lstat(path)).mtime};
+      }
+    }
+    yield* walk(root);
+  }
+
   async get(fileKey: string): Promise<Buffer | null> {
     const target = this.pathFor(fileKey);
     await assertNoSymlinkPath(this.rootDir, dirname(target));
@@ -239,6 +257,16 @@ export class S3PrivateStorage implements StorageAdapter {
       Metadata: { sha256: sha256Hex(bytes) },
       ServerSideEncryption: process.env.S3_SERVER_SIDE_ENCRYPTION as 'AES256' | 'aws:kms' | undefined,
     }));
+  }
+
+  async delete(key:string):Promise<void>{await this.client.send(new DeleteObjectCommand({Bucket:this.bucket,Key:this.keyFor(key)}));}
+  async *list():AsyncIterable<{key:string;modified:Date}>{
+    let token:string|undefined;
+    do{const page=await this.client.send(new ListObjectsV2Command({Bucket:this.bucket,Prefix:this.prefix?this.prefix+'/':undefined,ContinuationToken:token}));
+      for(const item of page.Contents||[])if(item.Key&&!item.Key.endsWith('/'))yield{key:normalizeStorageKey(this.prefix?item.Key.slice(this.prefix.length+1):item.Key),modified:item.LastModified??new Date()};
+      token=page.IsTruncated?page.NextContinuationToken:undefined;
+      if(page.IsTruncated&&!token)throw new Error('Incomplete storage listing');
+    }while(token);
   }
 
   async get(fileKey: string): Promise<Buffer | null> {

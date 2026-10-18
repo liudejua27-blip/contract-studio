@@ -1,3 +1,6 @@
+import {preferenceUsesSchema} from './review-learning';
+import {legalCitationsSchema} from './legal-research';
+import {clauseLinksSchema} from './contract-impact';
 import {z} from 'zod';
 import {partSchema,partySchema} from './contract-document-schema';
 import {blocksText} from './contract-document';
@@ -12,6 +15,9 @@ const change=z.discriminatedUnion('op',[
  z.object({op:z.literal('append'),target,part,reason}).strict(),
 ]);
 export const contractPatchSchema=z.object({
+ preferenceUses:preferenceUsesSchema,
+ legalCitations:legalCitationsSchema,
+ clauseLinks:clauseLinksSchema.optional(),
  baseSha256:z.string().regex(/^[a-f0-9]{64}$/).describe('原稿指纹，原样复制系统提供的值'),
  changes:z.array(change).max(120).describe('index 是原稿数组下标，从0开始；只列需修改的位置'),
  header:z.object({title:z.string().trim().min(1).max(240).optional(),parties:z.array(partySchema).min(2).max(20).optional(),signing:z.string().max(10000).optional(),reason}).strict().optional(),
@@ -50,6 +56,7 @@ export function applyContractPatch(base:ContractContent,patch:ContractPatch,expe
   if(parties!==undefined)next.parties=structuredClone(parties);
   if(signing!==undefined)next.signing=signing;
  }
- delete next.exportReady;delete next.skillAudit;delete next.drafting;
+ delete next.clauseMap;delete next.revision;
+ delete next.exportReady;delete next.skillAudit;delete next.drafting;delete next.agentOutcome;
  return next;
 }

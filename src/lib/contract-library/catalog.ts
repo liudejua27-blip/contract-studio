@@ -19,7 +19,7 @@ const fields=(rows:string[][]):Field[]=>rows.map(([id,label,question])=>({id,lab
 const clauses=(rows:string[][]):Clause[]=>rows.map(([id,title,text,...keywords])=>({id,title,text,keywords}));
 const risks=(rows:string[][]):Risk[]=>rows.map(([id,title,instruction,...keywords])=>({id,title,instruction,keywords}));
 const commonFields=fields([
- ['parties','签约主体','双方完整名称、住所、联系人及签署授权是什么？'],
+ ['parties','签约主体','各方分别负责什么？名称和签署资料可稍后补齐。'],
  ['stance','你的立场','你代表哪一方，希望优先保护哪些利益？'],
  ['jurisdiction','适用地区','履行地及拟适用法律是什么？首版适用范围为中国大陆一般民商事交易。'],
  ['term','履行期限','起止时间、交付节点和地点如何约定？'],

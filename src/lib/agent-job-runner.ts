@@ -2,10 +2,10 @@ import type {Contract} from './types';
 import type {AgentEventSink} from './agent-stream';
 import type {AgentViewStore} from './agent-view-store';
 
-/** One subscription per contract. Node jobs run independently; legacy Sites jobs retain phase advancement. */
+/** One subscription per contract. Server jobs run independently; the browser subscribes to saved progress. */
 export function createAgentJobRunner(deps:{store:AgentViewStore;load:(id:string)=>Promise<Contract>;stream:(path:string,emit:AgentEventSink,signal:AbortSignal)=>Promise<Contract>;update:(c:Contract)=>void;error:(id:string,message:string)=>void}){
  const active=new Map<string,AbortController>();
- const eligible=(c:Contract)=>{const j=c.workflow?.job;return j&&(j.status==='pending'||j.status==='running'&&(j.execution==='background'||Date.parse(j.leaseUntil||'')<=Date.now()));};
+ const eligible=(c:Contract)=>{const j=c.workflow?.job;return j&&(j.status==='pending'||j.status==='running');};
  return {
   isRunning:(id:string)=>active.has(id),
   async run(initial:Contract){
@@ -14,10 +14,10 @@ export function createAgentJobRunner(deps:{store:AgentViewStore;load:(id:string)
    let current=initial,token=0;
    try{
     // Existing server repair budget bounds normal phase advancement. Polling remains recovery only.
-    for(let n=0;(initial.workflow?.job?.execution==='background'||n<12)&&eligible(current)&&current.workflow?.job?.id===jobId;n++){
+    for(let n=0;eligible(current)&&current.workflow?.job?.id===jobId;n++){
      if(controller.signal.aborted)return;
      token=deps.store.begin(id,current.workflow!.job!);
-     const saved=await deps.stream(`contracts/${id}/jobs/${jobId}/${current.workflow?.job?.execution==='background'?'events':'run'}`,event=>deps.store.event(id,token,event),controller.signal);
+     const saved=await deps.stream(`contracts/${id}/jobs/${jobId}/events`,event=>deps.store.event(id,token,event),controller.signal);
      if(controller.signal.aborted)return;
      const cancelled=deps.store.get(id)?.jobId===jobId&&deps.store.get(id)?.status==='cancelled';
      if(cancelled)return;

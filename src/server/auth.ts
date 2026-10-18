@@ -1,10 +1,10 @@
+import {auditAccess} from './access-audit';
 import { createHash, randomBytes, randomUUID, scrypt as nodeScrypt, timingSafeEqual } from 'node:crypto';
 import { jwtVerify, SignJWT } from 'jose';
 import { z } from 'zod';
 import type { Role, User } from '@/lib/types';
 import { AppError, query, withTransaction } from './db';
 import {
-  assertAuthRateLimit,
   buildAuthRateLimitKeys,
   clearAuthRateLimit,
   recordAuthRateLimitAttempt,
@@ -43,6 +43,8 @@ type UserRow = {
   email: string;
   role: Role;
   disabled: boolean;
+  must_change_password?: boolean;
+  email_verified_at?: Date|string;
 };
 
 export type AuthContext = {
@@ -105,7 +107,7 @@ function normalizeEmail(email: string): string {
 }
 
 function rowToUser(row: UserRow): User & { disabled: boolean } {
-  return { id: row.id, name: row.name, email: row.email, role: row.role, disabled: row.disabled };
+  return { id: row.id, name: row.name, email: row.email, role: row.role, disabled: row.disabled, mustChangePassword: Boolean(row.must_change_password), emailVerified: Boolean(row.email_verified_at), emailVerificationRequired: process.env.CONTRACT_REQUIRE_VERIFIED_EMAIL==='true' };
 }
 
 function parseCookie(header: string | null, name: string): string | null {
@@ -202,7 +204,7 @@ export async function verifyPassword(password: string, encoded: string): Promise
 
 export async function findUserById(id: string): Promise<UserRow | null> {
   const result = await query<UserRow>(
-    'SELECT id, name, email, role, disabled FROM users WHERE id = $1 LIMIT 1',
+    'SELECT id, name, email, role, disabled, must_change_password, email_verified_at FROM users WHERE id = $1 LIMIT 1',
     [id],
   );
   return result.rows[0] ?? null;
@@ -210,7 +212,7 @@ export async function findUserById(id: string): Promise<UserRow | null> {
 
 async function findUserForLogin(email: string): Promise<(UserRow & { password_hash: string }) | null> {
   const result = await query<UserRow & { password_hash: string }>(
-    'SELECT id, name, email, role, disabled, password_hash FROM users WHERE email_normalized = $1 LIMIT 1',
+    'SELECT id, name, email, role, disabled, must_change_password, email_verified_at, password_hash FROM users WHERE email_normalized = $1 LIMIT 1',
     [normalizeEmail(email)],
   );
   return result.rows[0] ?? null;
@@ -221,14 +223,15 @@ async function createUserRecord(input: {
   email: string;
   password: string;
   role: Role;
+  mustChangePassword?: boolean;
 }): Promise<User> {
   const passwordHash = await hashPassword(input.password);
   try {
     const result = await query<UserRow>(
-      `INSERT INTO users (id, name, email, email_normalized, password_hash, role)
-       VALUES ($1, $2, $3, $4, $5, $6)
-       RETURNING id, name, email, role, disabled`,
-      [randomUUID(), input.name.trim(), input.email.trim(), normalizeEmail(input.email), passwordHash, input.role],
+      `INSERT INTO users (id, name, email, email_normalized, password_hash, role, must_change_password)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING id, name, email, role, disabled, must_change_password, email_verified_at`,
+      [randomUUID(), input.name.trim(), input.email.trim(), normalizeEmail(input.email), passwordHash, input.role, input.mustChangePassword ?? false],
     );
     return rowToUser(result.rows[0]);
   } catch (error) {
@@ -243,7 +246,6 @@ async function createUserRecord(input: {
 export async function registerClient(input: unknown, context: AuthAttemptContext = {}): Promise<User> {
   const parsed = registerInput.parse(input);
   const rateKeys = buildAuthRateLimitKeys('register', normalizeEmail(parsed.email), context.sourceIdentifier);
-  await assertAuthRateLimit(rateKeys);
   // Registration counts every attempt, including successful creation, so a
   // source cannot create unlimited accounts by choosing fresh email addresses.
   await recordAuthRateLimitAttempt(rateKeys);
@@ -252,13 +254,12 @@ export async function registerClient(input: unknown, context: AuthAttemptContext
 
 export async function createUserAsAdmin(input: unknown): Promise<User> {
   const parsed = adminUserInput.parse(input);
-  return createUserRecord(parsed);
+  return createUserRecord({...parsed, mustChangePassword: true});
 }
 
 export async function login(input: unknown, context: AuthAttemptContext = {}): Promise<{ user: User; token: string; sessionId: string; expiresAt: Date }> {
   const parsed = loginInput.parse(input);
   const rateKeys = buildAuthRateLimitKeys('login', normalizeEmail(parsed.email), context.sourceIdentifier);
-  await assertAuthRateLimit(rateKeys);
   // Reserve a bucket slot before password verification. This closes the
   // concurrent-request gap where many expensive scrypt operations could pass
   // the preflight check before their failures were recorded.
@@ -269,11 +270,11 @@ export async function login(input: unknown, context: AuthAttemptContext = {}): P
   }
   const user = rowToUser(row);
   const issued = await issueToken(user);
-  await query(
-    `INSERT INTO sessions (id, user_id, token_hash, expires_at)
-     VALUES ($1, $2, $3, $4)`,
-    [issued.sessionId, user.id, tokenHash(issued.token), issued.expiresAt],
-  );
+  await withTransaction(async client => {
+    const current = await client.query('SELECT password_hash, disabled FROM users WHERE id=$1 FOR UPDATE',[user.id]);
+    if (!current.rows[0] || current.rows[0].disabled || current.rows[0].password_hash !== row.password_hash) throw new AppError(401,'Invalid email or password.','INVALID_CREDENTIALS');
+    await client.query('INSERT INTO sessions (id,user_id,token_hash,expires_at) VALUES ($1,$2,$3,$4)',[issued.sessionId,user.id,tokenHash(issued.token),issued.expiresAt]);
+  });
   await clearAuthRateLimit(rateKeys);
   return { user, ...issued };
 }
@@ -345,18 +346,26 @@ export async function getAuthContext(request: Request): Promise<AuthContext | nu
 export async function requireAuth(request: Request): Promise<AuthContext> {
   const auth = await getAuthContext(request);
   if (!auth) throw new AppError(401, 'Sign in is required.', 'UNAUTHENTICATED');
+  if (auth.user.mustChangePassword && !['/api/auth/password','/api/auth/logout','/api/auth/verification-email'].includes(new URL(request.url).pathname)) throw new AppError(403, '请先修改初始密码。', 'PASSWORD_CHANGE_REQUIRED');
+  if(auth.user.emailVerificationRequired&&!auth.user.emailVerified&&!['/api/auth/password','/api/auth/logout','/api/auth/verification-email'].includes(new URL(request.url).pathname))throw new AppError(403,'请先验证邮箱。','EMAIL_VERIFICATION_REQUIRED');
+  await auditAccess(auth.user.id);
   return auth;
 }
 
 export async function revokeSession(request: Request): Promise<void> {
   const token = parseCookie(request.headers.get('cookie'), SESSION_COOKIE);
   if (!token) return;
+  let decoded: { userId: string; claims: SessionClaims };
   try {
-    const { claims } = await decodeToken(token);
-    await query('UPDATE sessions SET revoked_at = now() WHERE id = $1 AND revoked_at IS NULL', [claims.sid]);
+    decoded = await decodeToken(token);
   } catch {
     // Logout is idempotent, including for an already expired or malformed cookie.
+    return;
   }
+  await withTransaction(async client => {
+    const revoked = await client.query('UPDATE sessions SET revoked_at=now() WHERE id=$1 AND user_id=$2 AND revoked_at IS NULL RETURNING user_id', [decoded.claims.sid, decoded.userId]);
+    if (revoked.rowCount) await client.query('UPDATE editor_sessions SET active=false,updated_at=now() WHERE assigned_user_id=$1 AND active=true', [decoded.userId]);
+  });
 }
 
 export function clearSessionCookie(response: Response): void {
@@ -365,7 +374,7 @@ export function clearSessionCookie(response: Response): void {
 
 export async function listUsers(): Promise<User[]> {
   const result = await query<UserRow>(
-    'SELECT id, name, email, role, disabled FROM users ORDER BY created_at ASC, id ASC',
+    'SELECT id, name, email, role, disabled, must_change_password, email_verified_at FROM users ORDER BY created_at ASC, id ASC',
   );
   return result.rows.map(rowToUser);
 }
@@ -374,7 +383,7 @@ export async function updateUser(id: string, input: unknown, actorId?: string): 
   const parsed = adminUserPatch.parse(input);
   return withTransaction(async (client) => {
     const currentResult = await client.query<UserRow>(
-      'SELECT id, name, email, role, disabled FROM users WHERE id = $1 LIMIT 1 FOR UPDATE',
+      'SELECT id, name, email, role, disabled, must_change_password, email_verified_at FROM users WHERE id = $1 LIMIT 1 FOR UPDATE',
       [id],
     );
     const current = currentResult.rows[0];
@@ -406,7 +415,7 @@ export async function updateUser(id: string, input: unknown, actorId?: string): 
     const result = await client.query<UserRow>(
       `UPDATE users SET ${fields.join(', ')}, updated_at = now()
        WHERE id = $${values.length}
-       RETURNING id, name, email, role, disabled`,
+       RETURNING id, name, email, role, disabled, must_change_password, email_verified_at`,
       values as unknown[],
     );
     if (!result.rows[0]) throw new AppError(404, 'User not found.', 'USER_NOT_FOUND');
@@ -415,6 +424,7 @@ export async function updateUser(id: string, input: unknown, actorId?: string): 
         'UPDATE sessions SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL',
         [id],
       );
+      await client.query('UPDATE editor_sessions SET active=false,updated_at=now() WHERE assigned_user_id=$1 AND active=true', [id]);
     }
     return rowToUser(result.rows[0]);
   });
@@ -466,4 +476,64 @@ export function sessionCookieName(): string {
 
 export async function listAvailableLawyers(){
   return (await query<{id:string;name:string}>("SELECT id,name FROM users WHERE role='lawyer' AND disabled=false ORDER BY name,id")).rows;
+}
+
+export async function changePassword(userId: string, input: unknown): Promise<void> {
+  const parsed = z.object({currentPassword:z.string().min(1).max(256),password:z.string().min(12).max(256)}).parse(input);
+  if (parsed.password === parsed.currentPassword) throw new AppError(400,'新密码不能与原密码相同。','INVALID_INPUT');
+  await recordAuthRateLimitAttempt(buildAuthRateLimitKeys('login', 'password-change:'+userId));
+  const row = (await query<{password_hash:string}>('SELECT password_hash FROM users WHERE id=$1 AND NOT disabled',[userId])).rows[0];
+  if (!row || !await verifyPassword(parsed.currentPassword,row.password_hash)) throw new AppError(401,'原密码不正确。','INVALID_CREDENTIALS');
+  const hash = await hashPassword(parsed.password);
+  await withTransaction(async client => {
+    const changed = await client.query('UPDATE users SET password_hash=$1,must_change_password=false,updated_at=now() WHERE id=$2 AND password_hash=$3 AND NOT disabled RETURNING id',[hash,userId,row.password_hash]);
+    if (!changed.rowCount) throw new AppError(409,'凭据已发生变化，请重新登录。','CREDENTIAL_CHANGED');
+    await client.query('UPDATE sessions SET revoked_at=now() WHERE user_id=$1 AND revoked_at IS NULL',[userId]);
+    await client.query('UPDATE editor_sessions SET active=false,updated_at=now() WHERE assigned_user_id=$1 AND active=true',[userId]);
+    await client.query('UPDATE password_reset_tokens SET used_at=now() WHERE user_id=$1 AND used_at IS NULL',[userId]);
+    await client.query("INSERT INTO access_audit(actor_id,action,resource_id,outcome) VALUES ($1,'password.change',$1,200)",[userId]);
+  });
+}
+
+/** Operator must verify identity through an established channel before issuing. Raw token is returned once. */
+export async function issuePasswordReset(actor: User, userId: string, input: unknown): Promise<{token:string;expiresAt:string}> {
+  if (actor.role !== 'admin') throw new AppError(403,'Administrator required.','FORBIDDEN');
+  const parsed = z.object({currentPassword:z.string().min(1).max(256)}).parse(input);
+  await recordAuthRateLimitAttempt(buildAuthRateLimitKeys('login', 'password-reset:'+actor.id));
+  const admin = (await query<{password_hash:string}>('SELECT password_hash FROM users WHERE id=$1 AND NOT disabled AND role=\'admin\'',[actor.id])).rows[0];
+  if (!admin || !await verifyPassword(parsed.currentPassword,admin.password_hash)) throw new AppError(401,'管理员密码不正确。','INVALID_CREDENTIALS');
+  const token = randomBytes(32).toString('base64url');
+  const expiresAt = new Date(Date.now()+30*60*1000).toISOString();
+  await withTransaction(async client => {
+    const locked=await client.query('SELECT id,password_hash,role,disabled FROM users WHERE id=ANY($1::text[]) ORDER BY id FOR UPDATE',[[actor.id,userId]]);
+    const operator=locked.rows.find(row=>row.id===actor.id);
+    if(!operator||operator.disabled||operator.role!=='admin'||operator.password_hash!==admin.password_hash)throw new AppError(401,'管理员凭据已变化，请重新登录。','INVALID_CREDENTIALS');
+    const user = await client.query('SELECT id FROM users WHERE id=$1 AND NOT disabled FOR UPDATE',[userId]);
+    if (!user.rowCount) throw new AppError(404,'User not found.','USER_NOT_FOUND');
+    await client.query('UPDATE password_reset_tokens SET used_at=now() WHERE user_id=$1 AND used_at IS NULL',[userId]);
+    await client.query('INSERT INTO password_reset_tokens(token_hash,user_id,issued_by,expires_at) VALUES ($1,$2,$3,$4)',[tokenHash(token),userId,actor.id,expiresAt]);
+    await client.query('UPDATE sessions SET revoked_at=now() WHERE user_id=$1 AND revoked_at IS NULL',[userId]);
+    await client.query('UPDATE editor_sessions SET active=false,updated_at=now() WHERE assigned_user_id=$1 AND active=true',[userId]);
+    await client.query("INSERT INTO access_audit(actor_id,action,resource_id,outcome) VALUES ($1,'password.reset.issue',$2,200)",[actor.id,userId]);
+  });
+  return {token,expiresAt};
+}
+
+export async function resetPassword(input: unknown): Promise<void> {
+  const parsed = z.object({token:z.string().regex(/^[A-Za-z0-9_-]{43}$/),password:z.string().min(12).max(256)}).parse(input);
+  const digest = tokenHash(parsed.token);
+  // Reject invalid tokens before scrypt. Recheck under the user lock to prevent reuse/races.
+  const token = (await query<{user_id:string}>('SELECT user_id FROM password_reset_tokens WHERE token_hash=$1 AND used_at IS NULL AND expires_at>now()',[digest])).rows[0];
+  if (!token) throw new AppError(400,'重置链接无效或已过期。','RESET_INVALID');
+  const hash = await hashPassword(parsed.password);
+  await withTransaction(async client => {
+    const user = await client.query('SELECT id FROM users WHERE id=$1 AND NOT disabled FOR UPDATE',[token.user_id]);
+    const used = await client.query('UPDATE password_reset_tokens SET used_at=now() WHERE token_hash=$1 AND used_at IS NULL AND expires_at>now() RETURNING user_id',[digest]);
+    if (!user.rowCount || !used.rowCount) throw new AppError(400,'重置链接无效或已过期。','RESET_INVALID');
+    await client.query('UPDATE users SET password_hash=$1,must_change_password=false,updated_at=now() WHERE id=$2',[hash,token.user_id]);
+    await client.query('UPDATE sessions SET revoked_at=now() WHERE user_id=$1 AND revoked_at IS NULL',[token.user_id]);
+    await client.query('UPDATE editor_sessions SET active=false,updated_at=now() WHERE assigned_user_id=$1 AND active=true',[token.user_id]);
+    await client.query('UPDATE password_reset_tokens SET used_at=now() WHERE user_id=$1 AND used_at IS NULL',[token.user_id]);
+    await client.query("INSERT INTO access_audit(actor_id,action,resource_id,outcome) VALUES ($1,'password.reset.complete',$1,200)",[token.user_id]);
+  });
 }

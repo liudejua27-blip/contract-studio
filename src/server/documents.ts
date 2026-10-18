@@ -284,10 +284,12 @@ export function extractDocxText(
   if (/<!DOCTYPE\b|<!ENTITY\b/i.test(xml)) throw new DocxValidationError('DOCX document XML contains a DTD or external entity declaration');
 
   const pieces: string[] = [];
+  let textChars=0;
   const tokenPattern = /<w:p(?:\s[^>]*)?>|<\/w:p\s*>|<w:tr(?:\s[^>]*)?>|<\/w:tr\s*>|<w:tc(?:\s[^>]*)?>|<\/w:tc\s*>|<w:tab(?:\s[^>]*)?\/>|<w:br(?:\s[^>]*)?\/>|<w:cr(?:\s[^>]*)?\/>|<w:t(?:\s[^>]*)?>([\s\S]*?)<\/w:t\s*>/gi;
   let match: RegExpExecArray | null;
   while ((match = tokenPattern.exec(xml))) {
     const token = match[0];
+    const previousPieceCount=pieces.length;
     if (/^<w:t\b/i.test(token)) {
       pieces.push(decodeXmlText(match[1] ?? ''));
     } else if (/^<w:tab\b/i.test(token)) {
@@ -299,7 +301,8 @@ export function extractDocxText(
     } else if (/^<\/w:tc\b/i.test(token)) {
       pieces.push('\t');
     }
-    if (pieces.join('').length > maxTextChars) throw new DocxValidationError('DOCX extracted text exceeds the context limit');
+    if(pieces.length>previousPieceCount)textChars+=pieces.at(-1)!.length;
+    if (textChars > maxTextChars) throw new DocxValidationError('DOCX extracted text exceeds the context limit');
   }
   return pieces.join('')
     .replace(/[ \t]+\n/g, '\n')
@@ -338,7 +341,7 @@ function renderPart(part:ContractPart,numberingReference:string):Array<Paragraph
  });
 }
 function partyLines(p:ContractParty){
- const lines=[`${p.role}：${p.name}`];
+ const lines=[`${p.role}：${p.name||'________________'}`];
  for(const key of ['registrationId','address','legalRepresentative','authorizedRepresentative','contactName','phone','email'] as const)
   if(p[key])lines.push(`${PARTY_LABELS[key]}：${p[key]}`);
  if(p.details?.trim())lines.push(p.details.trim());
@@ -349,7 +352,7 @@ function signatureBlocks(parties:ContractParty[]){
  for(let n=0;n<parties.length;n+=2){
   const cells=parties.slice(n,n+2).map(p=>{
    const label=p.signatureMethod==='signature_and_seal'?'签名并盖章':p.signatureMethod==='seal'?'盖章':p.signatureMethod==='signature'?'签名':p.subjectType==='individual'?(p.authorizedRepresentative?'代理人签名':'本人签名'):'签名／盖章';
-   const lines=[`${p.role}：${p.name}`,...(p.legalRepresentative?[`法定代表人：${p.legalRepresentative}`]:[]),...(p.authorizedRepresentative?[`授权签署人：${p.authorizedRepresentative}`]:[]),`${label}：`];
+   const lines=[`${p.role}：${p.name||'________________'}`,...(p.legalRepresentative?[`法定代表人：${p.legalRepresentative}`]:[]),...(p.authorizedRepresentative?[`授权签署人：${p.authorizedRepresentative}`]:[]),`${label}：`];
    return new TableCell({width:{size:Math.floor(BODY_WIDTH/2),type:WidthType.DXA},margins:{top:120,bottom:240,left:0,right:200},children:[
     ...lines.map((line,i)=>paragraph(line,{bold:i===0,keepNext:true,after:120})),
     new Paragraph({children:[textRun('')],keepNext:true,spacing:{after:p.subjectType==='individual'?480:960}}),

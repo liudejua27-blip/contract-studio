@@ -1,0 +1,9 @@
+'use client';
+import {useState} from 'react';
+import {api} from '@/lib/api';
+import type {User} from '@/lib/types';
+import {broadcastLogout} from '@/lib/private-browser-store';
+export function AccountSecurity({required,onChanged,user}:{required?:boolean;onChanged:()=>void;user?:User}){
+ const [busy,setBusy]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState('');
+ return <section className="page-body"><h1>{required?'请修改初始密码':'账户安全'}</h1>{user&&!user.emailVerified&&<div className="notice"><p>邮箱尚未验证。</p><button disabled={busy} onClick={async()=>{setBusy(true);try{const r=await api<{message:string}>('auth/verification-email',{});setNotice(r.message);}catch(e){setError((e as Error).message)}finally{setBusy(false)}}}>发送验证邮件</button><button onClick={()=>window.location.reload()}>已验证，刷新状态</button></div>}{notice&&<p role="status">{notice}</p>}<p>密码修改后，所有设备都需要重新登录。</p><form className="auth-form" onSubmit={async e=>{e.preventDefault();const data=Object.fromEntries(new FormData(e.currentTarget));if(data.password!==data.confirm){setError('两次输入的新密码不一致。');return;}setBusy(true);setError('');try{await api('auth/password',data);broadcastLogout();onChanged();}catch(e){setError((e as Error).message);}finally{setBusy(false);}}}><label>当前密码<input type="password" name="currentPassword" autoComplete="current-password" required maxLength={256}/></label><label>新密码（至少 12 位）<input type="password" name="password" autoComplete="new-password" required minLength={12} maxLength={256}/></label><label>确认新密码<input type="password" name="confirm" autoComplete="new-password" required minLength={12} maxLength={256}/></label>{error&&<p role="alert">{error}</p>}<button className="primary" disabled={busy}>{busy?'正在保存…':'修改密码并重新登录'}</button></form><button className="text-button" onClick={async()=>{try{await api('auth/logout',{});broadcastLogout();onChanged();}catch(e){setError((e as Error).message)}}}>退出登录</button></section>;
+}

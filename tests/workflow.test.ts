@@ -21,6 +21,7 @@ test('a confirmed revision uses a bound patch, preserves its prior version, veri
  const old=fetch,m=memory(),base=contentFixture();const snap=await m.store.load();
  snap.contract.versions=[{id:'old-word',number:1,kind:'draft',source:'ai',fileKey:'old.docx',content:base,createdAt:''}];
  snap.contract.workflow={intake:{...intakeFixture(),confirmedAt:undefined}};
+ snap.contract.messages=[{id:'edit',role:'user',content:'只把第二条改得简洁一些，其他措辞保留。',createdAt:new Date().toISOString()}];
  await m.store.save(snap.contract,snap.revision);const before=structuredClone(m.get().versions[0]);const id=crypto.randomUUID();
  let c=await startWorkflow(m.store,u,{requestId:id,confirmId:m.get().workflow!.intake!.summaryId});assert.deepEqual(c.workflow!.job!.content,base);
  let patches=0,checks=0;
@@ -28,7 +29,7 @@ test('a confirmed revision uses a bound patch, preserves its prior version, veri
   globalThis.fetch=async(_url,init)=>{
    const b=JSON.parse(String(init?.body)),verify=b.messages[0].content.includes('CONTRACT_VERIFY_V2');
    if(verify){checks++;return Response.json({choices:[{message:{content:JSON.stringify({verdict:'consistent',issues:[]})}}]});}
-   assert.match(b.messages[0].content,/CONTRACT_PATCH_V1/);patches++;const input=JSON.parse(b.messages.find((x:any)=>x.role==='user').content);
+   assert.match(b.messages[0].content,/CONTRACT_PATCH_V1/);patches++;const input=JSON.parse(b.messages.find((x:any)=>x.role==='user').content);assert.match(input.request,/只把第二条改得简洁一些/);
    return Response.json({choices:[{message:{content:JSON.stringify({baseSha256:input.baseSha256,changes:[{op:'replace',target:'section',index:1,part:{...base.sections[1],content:base.sections[1].content+'双方依约履行。'},reason:'衔接说明'}]})}}]});
   };
   await controlWorkflow(m.store,u,id,'run');assert.equal(m.get().workflow!.job!.phase,'verify');assert.equal(m.puts(),0);
@@ -37,4 +38,15 @@ test('a confirmed revision uses a bound patch, preserves its prior version, veri
   assert.equal(patches,1);assert.equal(checks,1);assert.equal(m.puts(),1);assert.equal(c.versions.length,2);assert.deepEqual(c.versions[0],before);
   assert.deepEqual(c.versions[1].content!.sections.filter((_,i)=>i!==1),base.sections.filter((_,i)=>i!==1));
  }finally{globalThis.fetch=old}
+});
+
+test('background jobs stop after adaptive truncation recovery instead of retrying the same stage',async()=>{
+ const old=fetch,m=memory(),id=crypto.randomUUID();m.store.background=true;
+ m.store.environment={...m.store.environment,CONTRACT_AI_MAX_OUTPUT_TOKENS:'8000',CONTRACT_AI_MAX_RECOVERY_TOKENS:'16000'};
+ let calls=0;try{
+  globalThis.fetch=async()=>{calls++;return Response.json({choices:[{finish_reason:'length',message:{content:'incomplete'}}]});};
+  await startWorkflow(m.store,u,{requestId:id,message:'复杂交易'});
+  const c=await controlWorkflow(m.store,u,id,'run');
+  assert.equal(calls,2);assert.equal(c.workflow!.job!.status,'failed');assert.equal(c.workflow!.job!.code,'AI_OUTPUT_TRUNCATED');assert.equal(c.workflow!.job!.nextAttemptAt,undefined);
+ }finally{globalThis.fetch=old;}
 });

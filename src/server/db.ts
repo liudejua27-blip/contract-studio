@@ -40,6 +40,12 @@ function ensureDatabaseConfigured(): void {
   }
 }
 
+function logDatabaseFailure(error:unknown,operation:string){
+  const detail=error as {code?:unknown;constraint?:unknown};
+  const safe=(v:unknown)=>typeof v==='string'&&/^[a-zA-Z0-9_]{1,120}$/.test(v)?v:undefined;
+  console.error(JSON.stringify({event:'database_failure',operation,code:safe(detail?.code),constraint:safe(detail?.constraint)}));
+}
+
 export async function query<R extends QueryResultRow = QueryResultRow>(
   text: string,
   values: readonly unknown[] = [],
@@ -48,6 +54,7 @@ export async function query<R extends QueryResultRow = QueryResultRow>(
   try {
     return await pool.query<R>(text, values as unknown[]);
   } catch (error) {
+    logDatabaseFailure(error,'query');
     // Do not leak connection strings, SQL values, or server diagnostics to clients.
     const message = error instanceof Error ? error.message : 'Database query failed';
     if (/unique|duplicate/i.test(message)) {
@@ -74,6 +81,7 @@ export async function withTransaction<T>(
       // Preserve the original error. The connection is released below.
     }
     if (error instanceof AppError) throw error;
+    logDatabaseFailure(error,'transaction');
     const message = error instanceof Error ? error.message : 'Database transaction failed';
     if (/unique|duplicate/i.test(message)) {
       throw new AppError(409, 'The requested operation conflicts with a concurrent change.', 'CONFLICT');

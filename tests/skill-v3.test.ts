@@ -82,5 +82,5 @@ test('nested clause headings become real multi-level Word numbering; missing par
 });
 
 test('current skills really reach intake, draft and verify with traceable version receipts',async()=>{
- for(const stage of ['intake','draft','verify'] as const){const bundle=await legalSkillBundle(stage);assert.ok(bundle.receipts.some(r=>r.path==='platform/transaction-contract/SKILL.md'&&r.source.commit==='4.3.1'));assert.ok(bundle.prompt.includes('businessChecks'));if(stage!=='intake')assert.ok(bundle.receipts.some(r=>r.path==='platform/contract-word/SKILL.md'&&r.source.commit==='3.0.0'));}
+ for(const stage of ['intake','draft','verify'] as const){const bundle=await legalSkillBundle(stage);assert.ok(bundle.receipts.some(r=>r.path==='platform/transaction-contract/SKILL.md'&&r.source.commit==='5.6.0'));assert.ok(bundle.prompt.includes('businessChecks'));if(stage!=='intake')assert.ok(bundle.receipts.some(r=>r.path==='platform/contract-word/SKILL.md'&&r.source.commit==='3.2.0'));}
 });

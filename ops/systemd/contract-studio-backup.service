@@ -1,0 +1,13 @@
+[Unit]
+Description=Contract Studio consistent database and document backup
+After=network-online.target
+[Service]
+Type=oneshot
+User=contract-studio
+WorkingDirectory=/opt/contract-studio
+EnvironmentFile=/etc/contract-studio/server.env
+Environment=NODE_ENV=production
+ExecStart=/bin/sh -c 'exec /usr/bin/node .worker-build/backup.mjs create "/var/backups/contract-studio/$(date -u +%%Y%%m%%dT%%H%%M%%SZ)"'
+UMask=0077
+NoNewPrivileges=true
+TimeoutStartSec=2h

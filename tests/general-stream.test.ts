@@ -39,7 +39,7 @@ test('skill is pinned, available in all stages, paths cannot escape the allowlis
 });
 test('revenue terms satisfy commercial exchange and invalid quotation is corrected inside the Agent',async()=>{
  const old=fetch;let n=0;const entries=Object.entries(facts).filter(([id])=>id!=='exchange').map(([fieldId,f])=>({fieldId,...f}));
- try{globalThis.fetch=async(_url,init)=>{n++;if(n===1)return call('update_contract_spec',{templateId:'general',facts:[{fieldId:'partyA',value:values.partyA,quote:'模型改写的不存在原文'}]});assert.ok(JSON.parse(String(init?.body)).messages.some((m:any)=>m.role==='tool'&&m.content.includes('逐字复制')));return call('update_contract_spec',{templateId:'general',facts:entries,businessChecks:['collection','settlement','revenueAdjustments'].map(fieldId=>({fieldId,status:'missing',evidence:[],question:'请说明'+fieldId+'的安排？'}))});};
+ try{globalThis.fetch=async(_url,init)=>{n++;if(n===1)return call('update_contract_spec',{templateId:'general',facts:[{fieldId:'partyA',value:values.partyA,quote:'模型改写的不存在原文'}]});assert.ok(JSON.parse(String(init?.body)).messages.some((m:any)=>typeof m.content==='string'&&m.content.includes('逐字复制')));return call('update_contract_spec',{templateId:'general',facts:entries,businessChecks:['collection','settlement','revenueAdjustments'].map(fieldId=>({fieldId,status:'missing',evidence:[],question:'请说明'+fieldId+'的安排？'}))});};
  const r=await collectIntake([{id:'m',role:'user',content:Object.values(values).join('；'),createdAt:''}],undefined,env);assert.equal(n,2);assert.deepEqual(r.intake!.missing,['collection','settlement','revenueAdjustments']);assert.equal(r.intake!.facts.exchange,undefined);assert.equal(r.intake!.facts.revenue.value,values.revenue);
  }finally{globalThis.fetch=old}
 });

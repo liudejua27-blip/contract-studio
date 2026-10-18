@@ -82,7 +82,7 @@ test('invalid date citation is fixed in the same agent loop, with no repeated da
 
 test('proposal changing month-end payment is repaired before it is shown',async()=>{
  const old=fetch;let calls=0;const i=intakeFixture();i.facts.payment=fact('月底付');
- try{globalThis.fetch=async()=>response(++calls===1?{templateId:'software',facts:[],businessProposals:[{fieldId:'payment_method',value:'月底后3日内付款'}]}:{templateId:'software',reply:'月底付款的安排保留。',facts:[]});
+ try{globalThis.fetch=async()=>response(++calls===1?{templateId:'software',facts:[],businessProposals:[{fieldId:'payment_method',value:'月底后3日内付款'}]}:{templateId:'software',reply:'月底付款的安排保留。',facts:[],businessProposals:[]});
  const r=await collectIntake([message('其他按常见方式处理')],i,env);assert.equal(calls,2);assert.equal(r.intake!.facts.payment.value,'月底付');assert.deepEqual(r.intake!.businessProposals,[]);assert.deepEqual(r.intake!.missing,[]);
  }finally{globalThis.fetch=old}
 });

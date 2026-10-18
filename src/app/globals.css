@@ -46,6 +46,11 @@
 
 /* Assistance has no document canvas; keep the conversation near the brief. */
 .assistance-workspace .review-document { min-height: 0; }
+.delivery-response{display:grid;gap:12px;margin-top:18px;padding-top:16px;border-top:1px solid var(--border)}
+.delivery-response p{margin:0}
+.delivery-response form{display:grid;gap:10px}
+.delivery-response textarea{min-height:96px}
+.delivery-response .secondary{justify-self:start}
 @media (max-width: 800px) {
  .assistance-workspace .review-document { height: auto; min-height: 0; }
 }

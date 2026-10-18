@@ -4,8 +4,7 @@ import { AppError, query, withTransaction } from './db';
 /**
  * Authentication rate limits are persisted in PostgreSQL so separate app
  * instances share the same counters. The setup script should include this
- * statement in the normal schema migration; the lazy CREATE keeps an existing
- * local database usable while that migration is being coordinated.
+ * statement in the schema migration; runtime only checks readiness.
  */
 export const AUTH_RATE_LIMIT_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS auth_rate_limits (
@@ -42,7 +41,7 @@ function unavailable(error: unknown): AppError {
 
 async function ensureSchema(): Promise<void> {
   if (!schemaPromise) {
-    schemaPromise = query(AUTH_RATE_LIMIT_SCHEMA_SQL).then(() => undefined).catch((error) => {
+    schemaPromise = query('SELECT 1 FROM auth_rate_limits LIMIT 0').then(() => undefined).catch((error) => {
       schemaPromise = null;
       throw unavailable(error);
     });
@@ -81,48 +80,15 @@ export function buildAuthRateLimitKeys(
   return entries.map(({ scope, value }) => ({ scope, keyHash: keyHash(scope, value) }));
 }
 
-async function rowsFor(keys: AuthRateLimitKey[]): Promise<Array<{ scope: string; key_hash: string; attempts: number }>> {
-  if (keys.length === 0) return [];
-  const values: unknown[] = [];
-  const tuples = keys.map((key, index) => {
-    values.push(key.scope, key.keyHash);
-    const offset = index * 2;
-    return `($${offset + 1}, $${offset + 2})`;
-  });
-  return (await query<{ scope: string; key_hash: string; attempts: number }>(
-    `SELECT scope, key_hash, attempts
-       FROM auth_rate_limits
-      WHERE window_started_at > now() - ${RATE_WINDOW}
-        AND (scope, key_hash) IN (${tuples.join(', ')})`,
-    values,
-  )).rows;
-}
-
-/** Reject an attempt before password verification when a bucket is exhausted. */
-export async function assertAuthRateLimit(keys: AuthRateLimitKey[]): Promise<void> {
-  try {
-    await ensureSchema();
-    const rows = await rowsFor(keys);
-    for (const row of rows) {
-      const limit = LIMITS[row.scope as keyof typeof LIMITS];
-      if (limit !== undefined && row.attempts >= limit) {
-        throw new AppError(429, 'Too many authentication attempts. Try again later.', 'AUTH_RATE_LIMITED');
-      }
-    }
-  } catch (error) {
-    if (error instanceof AppError && (error.code === 'AUTH_RATE_LIMITED' || error.code === 'AUTH_RATE_LIMIT_UNAVAILABLE')) throw error;
-    throw unavailable(error);
-  }
-}
-
 /** Count an authentication attempt atomically for every bucket. */
 export async function recordAuthRateLimitAttempt(keys: AuthRateLimitKey[]): Promise<void> {
   if (keys.length === 0) return;
   try {
     await ensureSchema();
-    await withTransaction(async (client) => {
-      for (const key of keys) {
-        await client.query(
+    const exceeded = await withTransaction(async (client) => {
+      let exceeded = false;
+      for (const key of [...keys].sort((a,b) => (a.scope+a.keyHash).localeCompare(b.scope+b.keyHash))) {
+        const result = await client.query<{attempts:number}>(
           `INSERT INTO auth_rate_limits (scope, key_hash, window_started_at, attempts, updated_at)
            VALUES ($1, $2, now(), 1, now())
            ON CONFLICT (scope, key_hash) DO UPDATE
@@ -134,11 +100,14 @@ export async function recordAuthRateLimitAttempt(keys: AuthRateLimitKey[]): Prom
                WHEN auth_rate_limits.window_started_at <= now() - ${RATE_WINDOW} THEN now()
                ELSE auth_rate_limits.window_started_at
              END,
-             updated_at = now()`,
+             updated_at = now() RETURNING attempts`,
           [key.scope, key.keyHash],
         );
+        if (result.rows[0].attempts > LIMITS[key.scope]) exceeded = true;
       }
+      return exceeded;
     });
+    if (exceeded) throw new AppError(429, 'Too many authentication attempts. Try again later.', 'AUTH_RATE_LIMITED');
   } catch (error) {
     throw unavailable(error);
   }
@@ -149,19 +118,15 @@ export const recordAuthRateLimitFailure = recordAuthRateLimitAttempt;
 
 /** A successful authentication clears the failed-attempt buckets for that identity. */
 export async function clearAuthRateLimit(keys: AuthRateLimitKey[]): Promise<void> {
+  keys = keys.filter(key => !key.scope.endsWith('_source'));
   if (keys.length === 0) return;
   try {
     await ensureSchema();
-    const values: unknown[] = [];
-    const tuples = keys.map((key, index) => {
-      values.push(key.scope, key.keyHash);
-      const offset = index * 2;
-      return `($${offset + 1}, $${offset + 2})`;
+    await withTransaction(async client => {
+      for (const key of [...keys].sort((a,b)=>(a.scope+a.keyHash).localeCompare(b.scope+b.keyHash))) {
+        await client.query('DELETE FROM auth_rate_limits WHERE scope=$1 AND key_hash=$2',[key.scope,key.keyHash]);
+      }
     });
-    await query(
-      `DELETE FROM auth_rate_limits WHERE (scope, key_hash) IN (${tuples.join(', ')})`,
-      values,
-    );
   } catch (error) {
     throw unavailable(error);
   }

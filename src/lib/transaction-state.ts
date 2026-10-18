@@ -5,7 +5,7 @@ import {hasTransactionFact,GENERAL_CORE,GENERAL_FIELDS} from './contract-library
 import {PLAYBOOKS} from './contract-library/playbooks';
 import {PLAIN_QUESTIONS} from './contract-library/guided-policy';
 
-export const businessField=(id:string)=>/^[a-zA-Z][a-zA-Z0-9_]{0,79}$/.test(id)&&!/^party[A-T]_(?:address|email|phone|contactName|registrationId|legalRepresentative|authorizedRepresentative|signature(?:Method)?|signing)$/.test(id)&&!['__proto__','constructor','prototype','disputes','breach','ip','tax','invoice','rights'].includes(id);
+export const businessField=(id:string)=>/^[a-zA-Z][a-zA-Z0-9_]{0,79}$/.test(id)&&!/^party[A-T]_(?:address|email|phone|contactName|registrationId|legalRepresentative|authorizedRepresentative|signature(?:Method)?|signing)$/.test(id)&&!['__proto__','constructor','prototype','disputes','breach','ip','tax','invoice','rights','goal','stance'].includes(id);
 
 /** Templates are retrieval hints. Legacy frozen records keep their original gate. */
 export function transactionCoreFields(i:Intake){
@@ -16,6 +16,8 @@ export function transactionCoreFields(i:Intake){
   :id==='exchange'&&!represented('exchange')&&!represented('revenue')&&(represented('price')||represented('payment'))?['price','payment']:[id]);
 }
 export function transactionCoreKnown(i:Intake,id:string){
+ // Parties remain distinct actors even when their signing names are not supplied.
+ if(/^party[A-T]$/.test(id)&&i.participants?.some(p=>p.factId===id&&p.role.trim()&&!p.name.trim()))return true;
  const known=(key:string)=>{
   const check=i.businessChecks?.find(c=>c.fieldId===key);
   if(check)return (check.status==='answered'||check.status==='not_applicable')&&!businessCheckProblems([check],i.facts,[]).length;
@@ -31,6 +33,7 @@ export function unresolvedTransactionFields(i:Intake):string[]{
  const checks=new Map((i.businessChecks||[]).filter(c=>businessField(c.fieldId)).map(c=>[c.fieldId,c]));
  const core=transactionCoreFields(i);
  return [...new Set([...checks.keys(),...core])].filter(id=>{
+  if(/^party[A-T]$/.test(id)&&transactionCoreKnown(i,id))return false;
   const check=checks.get(id);
   const resolved=check&&(check.status==='answered'||check.status==='not_applicable'||check.status==='standard')&&!businessCheckProblems([check],i.facts,[]).length&&!(check.status==='standard'&&(i.deferredFields?.includes(id)||i.withdrawnFields?.includes(id)||core.includes(id)&&!['acceptance','breach','invoice','tax','disputes','warranty'].includes(id)));
   if(resolved)return false;
@@ -48,7 +51,7 @@ export function transactionQuestions(i:Intake){
  return unresolvedTransactionFields(i).filter(id=>!i.deferredFields?.includes(id)&&!i.businessProposals?.some(p=>p.fieldId===id)).slice(0,3).map(fieldId=>({
   fieldId,
   question:i.businessChecks?.find(c=>c.fieldId===fieldId&&c.status==='missing')?.question
-   ||(fieldId==='partyA'?'第一方是谁，在这次交易中负责什么？':fieldId==='partyB'?'另一方是谁，在这次交易中负责什么？':PLAIN_QUESTIONS[fieldId])
+   ||PLAIN_QUESTIONS[fieldId]
    ||GENERAL_FIELDS.find(f=>f.id===fieldId)?.question||PLAYBOOKS[i.templateId]?.fields.find(f=>f.id===fieldId)?.question||'这项尚未明确的生意安排，你准备怎么处理？',
  }));
 }

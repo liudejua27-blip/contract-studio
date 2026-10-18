@@ -1,7 +1,7 @@
 import {z} from 'zod';
 
 export const partySchema=z.object({
- role:z.string().trim().min(1).max(80), name:z.string().trim().min(1).max(240),
+ role:z.string().trim().min(1).max(80), name:z.string().trim().max(240).describe('已知名称照实保留；名称未提供或用户要求留空时填空字符串，不编造名称或占位文字。'),
  subjectType:z.enum(['organization','individual','unknown']).optional(),
  details:z.string().trim().max(2000).optional(),
  registrationId:z.string().trim().max(80).optional(), address:z.string().trim().max(500).optional(),

@@ -1,0 +1,4 @@
+[
+ {"id":"blank-both","turns":["我想委托一个团队做门店宣传视频，甲乙双方名称先空着。乙方拍摄一条60秒的店面和菜品视频，只在甲方自己抖音账号发布，不投广告。费用3000元，甲方看过成片确认后一次付清。2026年10月8日拍，10月12日前交MP4高清视频，不需要原素材。其他按常见方式写。"],"ready":true,"parties":2,"noMissing":["partyA","partyB","price","payment","term","usage"],"noQuestionPatterns":["名称|全称|姓名"]},
+ {"id":"blank-implicit","turns":["帮我写个保洁服务合同。我是甲方，保洁公司是乙方。办公室在青岛测试路8号，100平米，每周一三五晚上扫地拖地、倒垃圾、擦桌子，清洁用品乙方带。每月1200元，月底付。2026年10月1日开始，三个月。双方名字还没填，先留空出初稿。"],"ready":true,"parties":2,"noMissing":["partyA","partyB","scope","price","payment","term"],"noQuestionPatterns":["名称|全称|姓名"]}
+]

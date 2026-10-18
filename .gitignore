@@ -18,3 +18,5 @@ dist/
 # Local browser captures and generated review artifacts
 .playwright-cli/
 output/
+
+.worker-build/

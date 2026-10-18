@@ -3,9 +3,11 @@ name: contract-word
 description: 将已确认的通用合同组织成结构化中文正文、清单和签署页，通过平台工具生成可下载 Word 并核对交付结果。
 ---
 
-# 合同 Word 交付（平台适配版 3.0.0）
+# 合同 Word 交付（平台适配版 3.2.0）
 
 根据交易选择文档结构。正文用于当事人履行，来源、规则应用记录和律师事项留在版本检查记录，不混入合同。
+
+条款标题不重复写条号，按实际交易命名和组织，不逐条照搬模板。正文不出现待补充、模板说明或不存在的附件引用；确有实质缺项放 missing 反馈。名称留空按主体规则处理。ruleApplications 如需申报，path 来自本次已载入参考，ruleQuote 逐字取其规则原文，location 对应条款或附件标题，quote 逐字取该位置正文；不要求引用数量。
 
 ## 选择段落、表格和附件
 
@@ -17,7 +19,7 @@ sections/attachments 使用 blocks 时，每项包含 kind：paragraph{text}、h
 
 ## 主体与签署
 
-parties 与已确认 participants 逐方对应，不漏掉丙方或特殊角色。企业、个人、代理签署分别处理。已知资料使用 registrationId、address、contactName、phone、email、legalRepresentative、authorizedRepresentative；引用各自所属方的事实，不使用全局搜索替代归属判断。不能用 details 绕过归属要求。
+parties 与已确认 participants 逐方对应，不漏掉丙方或特殊角色。name 可以为空字符串，名称由排版器显示填写位，签署前再补齐；正文用甲方、乙方等角色称呼，不把姓名留白列为未决商业事项。企业、个人、代理签署分别处理。已知资料使用 registrationId、address、contactName、phone、email、legalRepresentative、authorizedRepresentative；引用各自所属方的事实，不使用全局搜索替代归属判断。不能用 details 绕过归属要求。
 
 用户已明确的各方资料必须写入对应结构化字段，不得省略。尤其是 partyB_signatureMethod 只属于乙方，明确“乙方签名并盖章”时必须写入乙方 signatureMethod=signature_and_seal，不能只写在正文或 signing。signatureMethod 仅在用户明确约定时填写 signature、seal 或 signature_and_seal；未知省略，由平台生成中性签署位。signing 只保留有依据的签署地点等说明。签署日期由实际签署人填写，不以生成日期代替。正文不重复画主体表或签字区。
 

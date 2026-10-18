@@ -89,7 +89,9 @@ test('missing decisions, proposal adoption and tools use the canonical state wit
 test('published intake tool exposes one completeness decision and retains contextual acknowledgement',async()=>{
  const old=fetch;
  try{globalThis.fetch=async(_url,init)=>{
-  const body=JSON.parse(String(init?.body));const schema=body.tools.find((t:any)=>t.function.name==='update_contract_spec').function.parameters.properties.result;
+  const body=JSON.parse(String(init?.body));const result=body.tools.find((t:any)=>t.function.name==='update_contract_spec').function.parameters.properties.result;
+  const schema=result.anyOf.find((s:any)=>s.properties.action.const==='update'),answer=result.anyOf.find((s:any)=>s.properties.action.const==='answer');
+  assert.ok(answer.properties.reply);assert.equal(answer.properties.facts,undefined);assert.equal(answer.additionalProperties,false);
   assert.ok(schema.properties.businessChecks.items.properties.evidence);assert.equal(schema.properties.questions,undefined);assert.equal(schema.properties.materialGaps,undefined);
   return response({templateId:'software',reply:'总价和交付安排都按你刚才说的保留。',facts:[]});
  };

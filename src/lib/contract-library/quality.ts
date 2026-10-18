@@ -1,7 +1,6 @@
 import {partText} from '../contract-document';
 import type {ContractContent} from '../types';
 /** Business completeness applies to every contract family. Never supplies missing facts. */
-export const GENERAL_QUALITY_RULES=`依据已载入的通用交易 Skill 核对核心约定的实质完整性、所有确认事实及正文附件一致性。按本交易实际复杂度起草或检查，事实遗漏、空泛核心约定和矛盾列为问题；法律专业判断留给律师。不得以来源引用数量或篇幅代替质量检查。`;
 export function substantiveProblems(c:ContractContent):string[]{
  const problems:string[]=[];
  for(const part of [...c.sections,...c.attachments||[]]){

@@ -1,19 +1,23 @@
+import {evaluationGate} from './eval-gate';
 import {scoreIntake} from './eval-contract-score';
 /** Synthetic model evaluation. Produces a small report for human review, without DB or deployment. */
 import {readFile,mkdir,writeFile} from 'node:fs/promises';
 import {collectIntake} from '../src/server/ai';
 import type {Intake,Message} from '../src/lib/types';
 async function main(){
+ const target=Number(process.env.CONTRACT_EVAL_PASS_RATE||0.95);
+ evaluationGate([],target); // Reject invalid configuration before any paid model calls.
  const cases=JSON.parse(await readFile(process.env.CONTRACT_EVAL_CASES||'tests/evals/contracts.json','utf8')) as any[];
  if(process.argv[2]==='--rescore'){
   const dir=process.argv[3];const report=JSON.parse(await readFile(dir+'/report.json','utf8'));
   const results=[];
   for(const old of report.results){const saved=JSON.parse(await readFile(dir+'/'+old.id+'.json','utf8'));const definition=cases.find(c=>c.id===old.id);const errors=saved.intake&&saved.replies.length===definition.turns.length?scoreIntake(definition,saved.intake):old.errors;results.push({...old,passed:!errors.length,errors});}
-  const rescored={...report,evaluationVersion:3,rescoredFrom:'report.json',rescoreReason:'Recheck recorded final state for unexpected conflicts, readiness and proposal safety. This does not establish per-turn acceptance for older reports without snapshots.',passed:results.filter(r=>r.passed).length,results};
-  await writeFile(dir+'/report-rescored.json',JSON.stringify(rescored,null,2));console.log('Rescored '+rescored.passed+'/'+report.total+'; no model calls');return;
+  const rescored={...report,...evaluationGate(results,target),evaluationVersion:4,rescoredFrom:'report.json',rescoreReason:'Recheck recorded final state for unexpected conflicts, readiness and proposal safety. This does not establish per-turn acceptance for older reports without snapshots.',passed:results.filter(r=>r.passed).length,results};
+  await writeFile(dir+'/report-rescored.json',JSON.stringify(rescored,null,2));console.log('Rescored '+rescored.passed+'/'+report.total+'; target '+target*100+'%; no model calls');if(!rescored.targetMet)process.exitCode=1;return;
  }
  const selected=process.argv[2]?cases.filter(c=>process.argv[2].split(',').includes(c.id)):cases;
- const dir='.data/qa/intake-v4-'+Date.now();await mkdir(dir,{recursive:true});console.log(dir);
+ if(!selected.length)throw new Error('没有匹配的评估场景');
+ const dir='.data/qa/intake-v5-'+Date.now();await mkdir(dir,{recursive:true});console.log(dir);
  // Opt-in transport diagnostics contain synthetic model outputs only, never request headers or credentials.
  const captures:Promise<unknown>[]=[];
  if(process.env.CONTRACT_EVAL_CAPTURE==='1'){
@@ -37,8 +41,8 @@ async function main(){
  }}
  await Promise.all([run(),run()]);
  await Promise.allSettled(captures);
- await writeFile(dir+'/report.json',JSON.stringify({evaluationVersion:3,synthetic:true,lawyerReviewed:false,model:process.env.CONTRACT_AI_MODEL,thinking:process.env.CONTRACT_AI_THINKING,effort:process.env.CONTRACT_AI_REASONING_EFFORT,casesFile:process.env.CONTRACT_EVAL_CASES||'tests/evals/contracts.json',total:results.length,passed:results.filter(r=>r.passed).length,results:results.map(({intake,snapshots,...r})=>r)},null,2));
+ await writeFile(dir+'/report.json',JSON.stringify({evaluationVersion:4,...evaluationGate(results,target),synthetic:true,lawyerReviewed:false,model:process.env.CONTRACT_AI_MODEL,thinking:process.env.CONTRACT_AI_THINKING,effort:process.env.CONTRACT_AI_REASONING_EFFORT,casesFile:process.env.CONTRACT_EVAL_CASES||'tests/evals/contracts.json',total:results.length,passed:results.filter(r=>r.passed).length,results:results.map(({intake,snapshots,...r})=>r)},null,2));
  await writeFile(dir+'/lawyer-review.csv','case,实质事实错误数,重大条款遗漏数,必须修改条款数,文字偏好修改数,备注\n'+selected.map(c=>c.id+',,,,,').join('\n'));
- console.log('Completed '+results.filter(r=>r.passed).length+'/'+results.length+'; '+dir);if(results.some(r=>!r.passed))process.exitCode=1;
+ console.log('Completed '+results.filter(r=>r.passed).length+'/'+results.length+'; '+dir);if(!evaluationGate(results,target).targetMet)process.exitCode=1;
 }
 main().catch(e=>{console.error(e.message);process.exitCode=1});

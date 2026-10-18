@@ -66,9 +66,9 @@ review/session claims。文档 URL 和 callback URL 内的窄 token 仍分别绑
 这遵循 [ONLYOFFICE Browser signature 文档](https://api.onlyoffice.com/docs/docs-api/additional-api/signature/browser/)
 对完整配置签名的要求。
 
-backend 调用 `createEditorConfig` 时应传入 reviewId、versionId、当前 editor session 的 `sessionId`、base versionId、revision、scratch `fileKey` 和原始 `sourceFileKey`。`fileKey` 是 OnlyOffice 读入的 scratch 对象，回调绝不覆盖它；回调会根据下载后 DOCX 的 sha256 生成新的 immutable fileKey，并把 sourceFileKey 交给数据库 hook 校验。回调 token 不允许客户端自行指定这些值。客户只允许拿到 view 配置，分配的律师才允许拿到 edit 配置。
+backend 调用 `createEditorConfig` 时应传入 reviewId、versionId、当前 editor session 的 `sessionId`、base versionId、revision、scratch `fileKey` 和原始 `sourceFileKey`。`fileKey` 是 OnlyOffice 读入的可更新 session 临时对象；回调会根据下载后 DOCX 的 sha256 生成新的不可变版本对象，并在保存成功时更新临时对象以支持重开编辑器。原始草稿和已保存版本不被覆盖。回调 token 不允许客户端自行指定这些值。客户只允许拿到 view 配置，分配的律师才允许拿到 edit 配置。
 
-文档 token 的用途是 `contract-document-read`，callback token 的用途是 `contract-document-callback`。两者均绑定 review、version、revision、fileKey、document key、session 和角色，并使用 HS256 签名。文档读取 token 和 `config.token` 默认 15 分钟过期；callback token 默认 8 小时，以覆盖一次律师审阅 session。所有 TTL 都有服务端上限且可按 token 类别配置，不能由浏览器延长。session 仍由数据库的 active/assigned/disabled 状态、当前 revision 和 complete 事务校验撤销；过期或被撤销的 token 必须提示重新打开编辑器。文件 URL 不是永久公开地址。
+文档 token 的用途是 `contract-document-read`，callback token 的用途是 `contract-document-callback`。两者均绑定 review、version、revision、fileKey、document key、编辑 session、网站登录 session 和角色，并使用 HS256 签名。文档读取 token 和 `config.token` 默认 15 分钟过期；callback token 默认 8 小时。每次读取或回调都重新检查账号、登录 session、律师分配、编辑 session 与版本；退出、停用、改密、重置、转交或交付后，旧 token 不再授权访问。过期或被撤销的 token 必须提示重新打开编辑器。文件 URL 不是永久公开地址。
 
 ## callback 保存规则
 
@@ -117,7 +117,7 @@ hook 必须在数据库事务中确认 session/revision 仍属于该审核任务
 
 OnlyOffice 的文档状态事件只表示编辑器发生了变化，不能被当作保存成功。前端在 `onDocumentStateChange` 得到 `data: true` 时，应调用 backend 的窄 token dirty 接口，把审核任务置为 `saveStatus = "pending"`。律师再次编辑时，即使上一次 callback 曾经返回 `saved`，也必须先变回 `pending`。
 
-force-save 回调完成且 backend 已持久化精确 revision 后，才把 `saveStatus` 置为 `saved`。`complete` 接口必须在同一个数据库事务中检查：审核未交付、editingVersionId 与请求版本一致、saveStatus 为 saved、当前 revision 没有 dirty 标记。保存中、保存失败和过期 revision 都不能交付。
+force-save 回调完成且 backend 已持久化精确 revision 后，才把 `saveStatus` 置为 `saved`；内容未变化的重复保存会结束当前等待状态，但不创建重复版本。Document Server 报保存失败时，当前待保存轮次标记为 `error`，保留此前已保存的版本。前端先等待 dirty 上报，再请求 force-save；交付按钮在本地有未保存修改或等待回调时不可用。`complete` 接口必须在同一个数据库事务中检查：审核未交付、editingVersionId 与请求版本一致、saveStatus 为 saved、当前 revision 没有 dirty 标记。保存中、保存失败和过期 revision 都不能交付。
 
 ## DOCX 文本上下文
 
@@ -130,3 +130,11 @@ force-save 回调完成且 backend 已持久化精确 revision 后，才把 `sav
 ## 参考官方接口
 
 实现依据 ONLYOFFICE 官方 callback handler 约定中的状态 1、2、3、4、6、7，以及官方文档对 callback URL 下载和 force-save 的说明。部署时仍应对实际 Document Server 版本做一次状态 2、6 保存、断线重试、旧 token 和保存失败验收。
+
+### 无改动保存
+
+“保存最新文档”也支持从未修改的合同。ONLYOFFICE 命令服务返回 4（没有新改动）后，服务器核对保存编号、编辑状态和文件哈希；初次保存生成内容相同的律师审阅版，重复保存复用现有版本。保存成功即可填写交付说明并交付。
+
+若有尚未保存的编辑、过期请求、文件缺失或真实命令错误，不会把旧文件冒充成已保存的新稿。已交付状态不再接受编辑通知。
+
+协议依据：[ONLYOFFICE Command service](https://api.onlyoffice.com/docs/docs-api/additional-api/command-service/)。本次自动检查使用协议替身，不代表真实 Document Server 联调验收。

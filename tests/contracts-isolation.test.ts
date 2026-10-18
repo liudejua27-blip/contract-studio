@@ -6,6 +6,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { ContractContent, User } from '../src/lib/types';
 import {
   assertOnlyOfficeRevisionCurrent,
+  assertOnlyOfficeAccess,
+  editorConfig,
   chatContract,
   workflowStore,
   getContractForRoute,
@@ -13,11 +15,16 @@ import {
   getVersionFile,
   markEditorDirty,
   persistOnlyOfficeRevision,
+  reportOnlyOfficeSaveFailure,
+  respondToDelivery,
+  assignReview,
+  addReviewMessage,
   submitReview,
   uploadReviewVersion,
 } from '../src/server/contracts';
 import { closeDatabase, query, withTransaction } from '../src/server/db';
 import { renderContract, storage } from '../src/server/documents';
+import type { OnlyOfficeTokenPayload } from '../src/server/onlyoffice';
 
 const databaseAvailable = Boolean(process.env.DATABASE_URL);
 
@@ -203,6 +210,7 @@ test('one editor session accepts repeated immutable saves and rejects an old cal
   const draftId = randomUUID();
   const reviewId = randomUUID();
   const sessionId = randomUUID();
+  const webSessionId = randomUUID();
   const sourceFileKey = `contracts/${contractId}/source.docx`;
   const documentKey = `document-${sessionId}`;
   const scratchFileKey = `scratch-${sessionId}`;
@@ -249,7 +257,23 @@ test('one editor session accepts repeated immutable saves and rejects an old cal
          VALUES ($1, $2, $3, $4, $5, $6, 1, 0, 'nonce-1', true)`,
         [sessionId, reviewId, draftId, documentKey, scratchFileKey, lawyerId],
       );
+      await client.query('INSERT INTO sessions(id,user_id,token_hash,expires_at) VALUES($1,$2,$3,now()+interval \'1 day\')',
+        [webSessionId,lawyerId,'test-token']);
     });
+
+    const claims={purpose:'document',scope:'contract-document-read',role:'edit',reviewId,versionId:draftId,
+      revision:sessionId,sessionId,userId:lawyerId,authSessionId:webSessionId,fileKey:scratchFileKey,
+      inputSourceFileKey:sourceFileKey,documentKey} as OnlyOfficeTokenPayload;
+    await assert.doesNotReject(()=>assertOnlyOfficeAccess(claims));
+    await query('UPDATE users SET disabled=true WHERE id=$1',[lawyerId]);
+    await assert.rejects(()=>assertOnlyOfficeAccess(claims),(e:any)=>e.code==='EDITOR_SESSION_INVALID');
+    await query('UPDATE users SET disabled=false WHERE id=$1',[lawyerId]);
+    await query('UPDATE sessions SET revoked_at=now() WHERE id=$1',[webSessionId]);
+    await assert.rejects(()=>assertOnlyOfficeAccess(claims),(e:any)=>e.code==='EDITOR_SESSION_INVALID');
+    await query('UPDATE sessions SET revoked_at=NULL WHERE id=$1',[webSessionId]);
+    await query('UPDATE reviews SET lawyer_id=NULL WHERE id=$1',[reviewId]);
+    await assert.rejects(()=>assertOnlyOfficeAccess(claims),(e:any)=>e.code==='EDITOR_SESSION_INVALID');
+    await query('UPDATE reviews SET lawyer_id=$1 WHERE id=$2',[lawyerId,reviewId]);
 
     const firstBytes = await renderContract(content('第一次律师编辑'));
     const firstFileKey = `contracts/${contractId}/onlyoffice/${sessionId}/first.docx`;
@@ -264,15 +288,32 @@ test('one editor session accepts repeated immutable saves and rejects an old cal
       status: 6 as const,
       sessionId,
       userId: lawyerId,
+      authSessionId: webSessionId,
       userData: { epoch: 1, nonce: 'nonce-1' },
     };
     memory.set(firstFileKey, firstBytes);
+    await query('UPDATE sessions SET revoked_at=now() WHERE id=$1',[webSessionId]);
+    await assert.rejects(
+      () => persistOnlyOfficeRevision(firstInput),
+      (error: unknown) => (error as { code?: string }).code === 'EDITOR_SESSION_INVALID',
+      'revocation during a callback download must also prevent its final write',
+    );
+    await query('UPDATE sessions SET revoked_at=NULL WHERE id=$1',[webSessionId]);
     await assert.rejects(
       () => persistOnlyOfficeRevision({ ...firstInput, userData: { epoch: 1, nonce: 'wrong-nonce' } }),
       (error: unknown) => (error as { code?: string }).code === 'EDITOR_REVISION_STALE',
       'a callback must match the pending save nonce even when its epoch matches',
     );
     await persistOnlyOfficeRevision(firstInput);
+    const firstVersion = (await query<{text_content:string}>(
+      'SELECT text_content FROM versions WHERE review_id=$1 ORDER BY number DESC LIMIT 1',[reviewId])).rows[0];
+    assert.match(firstVersion.text_content,/第一次律师编辑/,'online saves must support version text comparison');
+    await query("UPDATE reviews SET save_status='pending' WHERE id=$1",[reviewId]);
+    await query('UPDATE editor_sessions SET save_nonce=$1 WHERE id=$2',['nonce-repeat',sessionId]);
+    assert.equal((await getOnlyOfficeRevisionState(firstInput)).state,'current','a repeated force-save must finish a pending save');
+    await persistOnlyOfficeRevision({...firstInput,userData:{epoch:1,nonce:'nonce-repeat'}});
+    assert.equal((await query<{save_status:string}>('SELECT save_status FROM reviews WHERE id=$1',[reviewId])).rows[0].save_status,'saved');
+    assert.equal(Number((await query<{n:string}>('SELECT count(*)::text AS n FROM versions WHERE review_id=$1',[reviewId])).rows[0].n),1);
     const firstSession = (await query<{ base_version_id: string; document_key: string; saved_epoch: number; dirty_epoch: number }>(
       'SELECT base_version_id, document_key, saved_epoch, dirty_epoch FROM editor_sessions WHERE id = $1',
       [sessionId],
@@ -281,9 +322,15 @@ test('one editor session accepts repeated immutable saves and rejects an old cal
     assert.equal(firstSession.document_key, documentKey);
     assert.equal(Number(firstSession.saved_epoch), 1);
     assert.equal(Number(firstSession.dirty_epoch), 1);
+    memory.set(scratchFileKey,Buffer.from('incomplete scratch'));
+    await editorConfig(lawyer,contractId,reviewId,false,webSessionId);
+    assert.deepEqual(memory.get(scratchFileKey),firstBytes,'reopening restores scratch from the last committed Word');
 
     await markEditorDirty(lawyer, contractId, reviewId, {});
     await query('UPDATE editor_sessions SET save_nonce = $1 WHERE id = $2', ['nonce-2', sessionId]);
+    await reportOnlyOfficeSaveFailure({role:'edit',userId:lawyerId,reviewId,versionId:draftId,sessionId} as OnlyOfficeTokenPayload,{status:7,userdata:{epoch:2,nonce:'nonce-2'}});
+    assert.equal((await query<{save_status:string}>('SELECT save_status FROM reviews WHERE id=$1',[reviewId])).rows[0].save_status,'error');
+    await query("UPDATE reviews SET save_status='pending' WHERE id=$1",[reviewId]);
     await assert.rejects(
       () => persistOnlyOfficeRevision(firstInput),
       (error: unknown) => (error as { code?: string }).code === 'EDITOR_REVISION_STALE',
@@ -359,6 +406,48 @@ test('one editor session accepts repeated immutable saves and rejects an old cal
       await client.query('DELETE FROM contracts WHERE id = $1', [contractId]);
       await client.query('DELETE FROM users WHERE id = ANY($1::text[])', [[ownerId, lawyerId]]);
     });
+  }
+});
+
+test('one lawyer stays responsible, delivery stays final and both parties can continue communicating', {
+  skip: !databaseAvailable,
+}, async () => {
+  const ownerId=randomUUID(),lawyerId=randomUUID(),otherLawyerId=randomUUID(),contractId=randomUUID(),draftId=randomUUID(),finalId=randomUUID(),reviewId=randomUUID();
+  const owner=actor(ownerId,'Receipt Client','client');
+  try {
+    await query("INSERT INTO users(id,name,email,email_normalized,password_hash,role) VALUES($1,'Receipt Client',$2,$2,'test','client'),($3,'Receipt Lawyer',$4,$4,'test','lawyer')",
+      [ownerId,owner.email,lawyerId,`${lawyerId}@isolation.test`]);
+    await query('INSERT INTO contracts(id,owner_id,title) VALUES($1,$2,$3)',[contractId,ownerId,'交付回应测试']);
+    await query("INSERT INTO versions(id,contract_id,number,kind,file_key,source,sha256) VALUES($1,$3,1,'draft',$4,'demo','draft'),($2,$3,2,'review',$5,'lawyer','final')",
+      [draftId,finalId,contractId,`contracts/${contractId}/draft.docx`,`contracts/${contractId}/final.docx`]);
+    await query("INSERT INTO reviews(id,contract_id,submitted_version_id,lawyer_id,status,stance,concerns,requirements,final_version_id,completed_at,delivery_note,editing_version_id,save_status) VALUES($1,$2,$3,$4,'completed','甲方','','原需求',$5,now(),'已审阅',$5,'saved')",
+      [reviewId,contractId,draftId,lawyerId,finalId]);
+    await query("INSERT INTO users(id,name,email,email_normalized,password_hash,role) VALUES($1,'Other Lawyer',$2,$2,'test','lawyer')",[otherLawyerId,`${otherLawyerId}@isolation.test`]);
+    await query("UPDATE reviews SET status='waiting' WHERE id=$1",[reviewId]);
+    await assignReview(actor(randomUUID(),'Admin','admin'),contractId,reviewId,lawyerId);
+    await assert.rejects(()=>assignReview(actor(randomUUID(),'Admin','admin'),contractId,reviewId,otherLawyerId),(e:any)=>e.code==='LAWYER_FIXED');
+    await query("UPDATE reviews SET status='completed' WHERE id=$1",[reviewId]);
+    await assert.rejects(()=>respondToDelivery(actor(randomUUID(),'Other','client'),contractId,reviewId,{action:'received'}),(e:any)=>e.code==='FORBIDDEN');
+    const acknowledged=await respondToDelivery(owner,contractId,reviewId,{action:'received'});
+    assert.equal(acknowledged.reviews[0].clientResponse,'received');
+    assert.ok(acknowledged.reviews[0].clientRespondedAt);
+    await respondToDelivery(owner,contractId,reviewId,{action:'received'});
+    await assert.rejects(()=>respondToDelivery(owner,contractId,reviewId,{action:'request_changes',feedback:'请核对第四条付款日期'}),(e:any)=>e.code==='CONTRACT_DELIVERED');
+    await assert.rejects(()=>submitReview(owner,contractId,{versionId:finalId,stance:'甲方'}),(e:any)=>e.code==='CONTRACT_DELIVERED');
+    await addReviewMessage(owner,contractId,reviewId,{content:'后续想咨询这份合同相关的线下服务'});
+    const continued=await addReviewMessage(actor(lawyerId,'Lawyer','lawyer'),contractId,reviewId,{content:'可以继续沟通具体情况',requestInfo:true});
+    assert.equal(continued.reviews.length,1);
+    assert.equal(continued.reviews[0].status,'completed');
+    assert.equal(continued.reviews[0].finalVersionId,finalId);
+    assert.equal(continued.reviews[0].lawyerId,lawyerId);
+    assert.equal(continued.reviews[0].messages.length,2);
+    await assert.rejects(()=>addReviewMessage(actor(otherLawyerId,'Other Lawyer','lawyer'),contractId,reviewId,{content:'未授权消息'}),(e:any)=>e.code==='FORBIDDEN');
+
+  } finally {
+    await query('DELETE FROM reviews WHERE contract_id=$1',[contractId]);
+    await query('DELETE FROM versions WHERE contract_id=$1',[contractId]);
+    await query('DELETE FROM contracts WHERE id=$1',[contractId]);
+    await query('DELETE FROM users WHERE id=ANY($1::text[])',[[ownerId,lawyerId,otherLawyerId]]);
   }
 });
 

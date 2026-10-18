@@ -1,7 +1,8 @@
 export async function api<T>(path: string, body?: unknown, method?: string): Promise<T> {
-  const response = await fetch(`/api/${path}`, { method: method ?? (body === undefined ? 'GET' : 'POST'), headers: body instanceof FormData ? {} : body === undefined ? {} : { 'Content-Type': 'application/json' }, body: body instanceof FormData ? body : body === undefined ? undefined : JSON.stringify(body), credentials: 'same-origin', cache: 'no-store', signal:AbortSignal.timeout(path.includes('/jobs/')?80000:20000) }).catch(() => { throw new Error('暂时无法连接服务，请恢复连接后重试。'); });
+  const response = await fetch(`/api/${path}`, { method: method ?? (body === undefined ? 'GET' : 'POST'), headers: body instanceof FormData ? {} : body === undefined ? {} : { 'Content-Type': 'application/json' }, body: body instanceof FormData ? body : body === undefined ? undefined : JSON.stringify(body), credentials: 'same-origin', cache: 'no-store', signal:AbortSignal.timeout(path.includes('/jobs/')?80000:body instanceof FormData?(path.includes('/materials')?120000:60000):20000) }).catch(() => { throw new Error('暂时无法连接服务，请恢复连接后重试。'); });
   const value = await response.json().catch(() => ({})) as {data?: unknown; code?: string; error?: string};
   if (!response.ok) {
+    if (response.status === 401 && !path.startsWith('auth/') && typeof window !== 'undefined') window.dispatchEvent(new Event('contract-session-expired'));
     const messages: Record<string,string> = {
       AI_NOT_CONFIGURED:'尚未配置模型服务。请联系管理员完成配置，或明确选择示例体验。',
       AI_PROVIDER_ERROR:'模型服务返回错误，请稍后重试。你的已有合同没有改变。',

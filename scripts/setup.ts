@@ -1,3 +1,8 @@
+import {LEARNING_SCHEMA_SQL} from '../src/server/learning-schema';
+import {MATERIAL_SCHEMA_SQL} from '../src/server/material-schema';
+import { PRODUCTION_SCHEMA_SQL } from '../src/server/production-schema';
+import { WORKER_SCHEMA_SQL } from '../src/server/worker-schema';
+import { initializeSchedulerPolicy } from '../src/server/worker-scheduler';
 import { AUTH_RATE_LIMIT_SCHEMA_SQL } from '../src/server/rate-limit';
 import { pool, databaseConfigured, closeDatabase } from '../src/server/db';
 
@@ -105,7 +110,7 @@ WHERE v.review_id IS NULL
 DO $$
 BEGIN
   IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint WHERE conname = 'versions_review_id_fkey'
+    SELECT 1 FROM pg_constraint WHERE conname = 'versions_review_id_fkey' AND conrelid='versions'::regclass
   ) THEN
     ALTER TABLE versions
       ADD CONSTRAINT versions_review_id_fkey
@@ -151,6 +156,8 @@ CREATE TABLE IF NOT EXISTS idempotency_keys (
   created_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (scope, key)
 );
+${MATERIAL_SCHEMA_SQL}
+${LEARNING_SCHEMA_SQL}
 `;
 
 async function main(): Promise<void> {
@@ -158,7 +165,10 @@ async function main(): Promise<void> {
     throw new Error('DATABASE_URL is required to initialize Contract Studio.');
   }
   await pool.query(SCHEMA_SQL);
+  await pool.query(PRODUCTION_SCHEMA_SQL);
   await pool.query(AUTH_RATE_LIMIT_SCHEMA_SQL);
+  await pool.query(WORKER_SCHEMA_SQL);
+  await initializeSchedulerPolicy();
   await closeDatabase();
 }
 

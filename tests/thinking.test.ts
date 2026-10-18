@@ -6,7 +6,6 @@ import {join} from 'node:path';
 import {z} from 'zod';
 import {configuredThinking,thinkingParameters} from '../src/server/agent/thinking';
 import {runStructuredAgent as sdk} from '../src/server/agent/runtime';
-import {runStructuredAgent as core} from '../src/server/agent/runtime-core';
 const env={CONTRACT_AI_API_KEY:'test',CONTRACT_AI_BASE_URL:'https://api.deepseek.com',CONTRACT_AI_MODEL:'deepseek-flash'};
 const call=(name:string,result:unknown,thinking:string)=>Response.json({choices:[{finish_reason:'tool_calls',message:{reasoning_content:thinking,tool_calls:[{id:crypto.randomUUID(),type:'function',function:{name,arguments:JSON.stringify(result)}}]}}]});
 
@@ -16,7 +15,7 @@ test('Pi effort is mapped explicitly; off disables thinking and non-DeepSeek rem
  assert.deepEqual(thinkingParameters(env.CONTRACT_AI_BASE_URL,{CONTRACT_AI_THINKING:'off'}),{thinking:{type:'disabled'},temperature:0.2});
  assert.deepEqual(thinkingParameters('https://other.test',{}),{temperature:0.2});
 });
-for(const [name,run] of [['sdk',sdk],['core',core]] as const){
+for(const [name,run] of [['sdk',sdk]] as const){
  test(`${name}: all three stages actually send high and carry private thinking through tool calls`,async()=>{
   const original=fetch;let calls=0;const publicEvents:unknown[]=[];
   try{

@@ -1,0 +1,7 @@
+[Unit]
+Description=Check Contract Studio every minute
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+[Install]
+WantedBy=timers.target

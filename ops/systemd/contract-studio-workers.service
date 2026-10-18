@@ -1,0 +1,23 @@
+[Unit]
+Description=Contract Studio autoscaling workers
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=contract-studio
+WorkingDirectory=/opt/contract-studio
+EnvironmentFile=/etc/contract-studio/server.env
+Environment=NODE_ENV=production
+Environment=CONTRACT_WORKER_MODE=external
+ExecStart=/usr/bin/node /opt/contract-studio/.worker-build/agent-supervisor.mjs
+Restart=on-failure
+RestartSec=5
+# Signal the supervisor first; it asks children to finish their current stage.
+KillMode=mixed
+TimeoutStopSec=690
+UMask=0077
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

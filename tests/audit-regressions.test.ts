@@ -1,47 +1,71 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {intakeFixture,contentFixture} from './fixtures';
-import type {Contract,Review,Version} from '../src/lib/types';
-import {compileTransactionUpdate,intakeSchema} from '../src/lib/transaction-update';
-import {transactionQuestions,unresolvedTransactionFields} from '../src/lib/transaction-state';
-import {latestReview,reviewVersionProblem} from '../src/lib/review-policy';
-import {summary} from '../src/lib/contract-list';
-import {readModelResponse} from '../src/server/agent/model-stream';
-import {observeJob} from '../src/server/job-subscription';
-import {startWorkflow,controlWorkflow} from '../src/server/workflow';
-
-function contract():Contract{const content=contentFixture();return {id:'c',ownerId:'u',ownerName:'客户',title:'合同',createdAt:'',updatedAt:'',messages:[],reviews:[],workflow:{intake:content.confirmation},versions:[{id:'v',kind:'draft',number:1,source:'ai',fileKey:'v.docx',content,createdAt:''}]};}
-const review=(id:string,status:Review['status'],submittedAt:string):Review=>({id,status,submittedAt,submittedVersionId:'v',lawyerId:'l',stance:'甲方',concerns:'',requirements:'',messages:[]});
-
-test('deferred payment preserves its known part, cannot confirm and does not repeat its question',()=>{
- const q='款项分两次付，具体比例还没谈好';const i=compileTransactionUpdate(intakeSchema.parse({templateId:'software',facts:[{fieldId:'payment',value:'款项分两次付',quote:'款项分两次付'}],businessChecks:[{fieldId:'payment',status:'deferred',evidence:['具体比例还没谈好']}]}),intakeFixture(),[q]).intake!;
- assert.equal(i.facts.payment.value,'款项分两次付');assert.ok(i.deferredFields?.includes('payment'));assert.ok(unresolvedTransactionFields(i).includes('payment'));assert.deepEqual(transactionQuestions(i),[]);assert.ok(i.reviewNotes?.some(n=>n.includes('付款')));
-});
-test('review selection is independent of storage order and prefers an open review',()=>{
- const a=review('old','completed','2026-09-20'),b=review('new','waiting','2026-09-22');
- for(const reviews of [[a,b],[b,a]]){assert.equal(latestReview(reviews)?.id,b.id);const c=contract();c.reviews=reviews;assert.equal(summary(c).displayStatus,'待律师接收');}
-});
-test('review requires the current confirmed Word; a later message invalidates the old Word',()=>{
- const c=contract(),v=c.versions[0];assert.equal(reviewVersionProblem(c,v),undefined);
- c.workflow!.inputRevision=1;assert.equal(reviewVersionProblem(c,v)?.code,'VERSION_OUTDATED');
- c.workflow!.inputRevision=0;delete c.workflow!.intake!.confirmedAt;assert.ok(reviewVersionProblem(c,v));
- const lawyer:Version={...v,id:'lawyer',kind:'review',source:'lawyer',content:null};c.versions.push(lawyer);
- assert.equal(reviewVersionProblem(c,lawyer),undefined);assert.ok(reviewVersionProblem(c,v));
-});
-test('a patch tool streams document text but never tool reasons, hashes or evidence',async()=>{
- const args=JSON.stringify({baseSha256:'private-hash',changes:[{op:'replace',target:'section',index:1,reason:'private-reason',part:{title:'价款及付款',content:'总价为2000元，分两次付款。'}}]});
- const wire=[{choices:[{delta:{tool_calls:[{index:0,id:'patch',function:{name:'apply_contract_patch',arguments:args}}]}}]},{choices:[{delta:{},finish_reason:'tool_calls'}]}].map(x=>'data: '+JSON.stringify(x)+'\n\n').join('')+'data: [DONE]\n\n';
- const previews:string[]=[];await readModelResponse(new Response(wire,{headers:{'content-type':'text/event-stream'}}),'draft',e=>{if(e.type==='preview')previews.push(e.text);});
- assert.ok(previews.some(t=>t.includes('2000元')));assert.doesNotMatch(previews.join(''),/private-hash|private-reason|baseSha256/);
-});
-test('progress polling hydrates the contract only once at its terminal boundary',async()=>{
- const c=contract();c.workflow!.job={id:'j',phase:'generate',status:'running',attempt:1,messageId:'m',versionId:'new',createdAt:'',updatedAt:''};let loads=0,peeks=0;
- const response=observeJob(async()=>{loads++;return c;},async()=>{assert.fail('separate progress query must not run');},'j',1,1000,async()=>{peeks++;if(peeks===3)c.workflow!.job!.status='completed';return {job:c.workflow!.job,snapshot:{jobId:'j',phase:'generate',label:'正在起草',text:'正文',revision:String(peeks)}};});
- assert.match(await response.text(),/正文/);assert.equal(peeks,3);assert.equal(loads,1);
-});
-test('lawyer Word cannot silently become a newly drafted AI contract, including an old pending job',async()=>{
- const c=contract();c.versions.push({...c.versions[0],id:'lawyer',number:2,kind:'review',source:'lawyer',content:null});const user={id:'u',name:'客户',email:'u@test',role:'client' as const};let saves=0;
- const store={load:async()=>({contract:structuredClone(c),revision:0}),save:async(next:Contract)=>{saves++;return next;},put:async()=>{assert.fail('must not write Word');return '';},limit:async()=>{assert.fail('must not consume quota');}};
- await assert.rejects(startWorkflow(store,user,{requestId:crypto.randomUUID(),message:'调整付款'}),(e:any)=>e.code==='LAWYER_REVISION_REQUIRED');
- c.workflow!.job={id:'j',phase:'generate',status:'pending',attempt:0,messageId:'m',versionId:'new',createdAt:'',updatedAt:''};const stopped=await controlWorkflow(store,user,'j','run');assert.equal(stopped.workflow!.job!.code,'LAWYER_REVISION_REQUIRED');assert.equal(saves,1);assert.deepEqual(stopped.versions,c.versions);
-});
+import {randomUUID} from 'node:crypto';
+import {query,closeDatabase} from '../src/server/db';
+import {deletionRequest,deletionState,purgeDueContracts} from '../src/server/lifecycle';
+import {addReviewMessage,getContractForRoute,contractChangeToken,versionDetails,messagePage,workflowStore} from '../src/server/contracts';
+import {contentFixture} from './fixtures';
+import type {User} from '../src/lib/types';
+const enabled=!!process.env.DATABASE_URL;
+test.after(async()=>{if(enabled)await closeDatabase()});
+async function fixture(work:(f:any)=>Promise<void>){
+ const owner:User={id:randomUUID(),role:'client',name:'Fixture',email:randomUUID()+'@fixture.test'},lawyer:User={id:randomUUID(),role:'lawyer',name:'Lawyer',email:randomUUID()+'@fixture.test'};
+ const cid=randomUUID(),rid=randomUUID(),vid=randomUUID();
+ try{
+ await query("INSERT INTO users(id,name,email,email_normalized,password_hash,role) VALUES($1,'Fixture',$2,$2,'fixture','client'),($3,'Lawyer',$4,$4,'fixture','lawyer')",[owner.id,owner.email,lawyer.id,lawyer.email]);
+ await query("INSERT INTO contracts(id,owner_id,title) VALUES($1,$2,'Fixture')",[cid,owner.id]);
+ await query("INSERT INTO versions(id,contract_id,number,kind,file_key,source,content) VALUES($1,$2,1,'draft',$1,'demo',$3::jsonb)",[vid,cid,JSON.stringify(contentFixture())]);
+ await query("INSERT INTO reviews(id,contract_id,submitted_version_id,lawyer_id,status,stance,concerns,requirements) VALUES($1,$2,$3,$4,'completed','','','')",[rid,cid,vid,lawyer.id]);
+ await work({owner,lawyer,cid,rid,vid});
+ }finally{
+ await query('DELETE FROM editor_sessions WHERE review_id=$1',[rid]);await query('DELETE FROM reviews WHERE id=$1',[rid]);await query('DELETE FROM contracts WHERE id=$1',[cid]);await query('DELETE FROM users WHERE id=ANY($1::text[])',[[owner.id,lawyer.id]]);
+ }
+}
+async function due(cid:string){await query("UPDATE contracts SET updated_at=now()-interval '31 days' WHERE id=$1",[cid]);await query("UPDATE deletion_requests SET requested_at=now()-interval '32 days',delete_after=now()-interval '2 days' WHERE contract_id=$1",[cid]);}
+test('expired contract with editor is purged and file/session GC references survive',{skip:!enabled},()=>fixture(async({owner,cid,rid,vid})=>{
+ await query('INSERT INTO editor_sessions(id,review_id,base_version_id,document_key,scratch_file_key,assigned_user_id) VALUES($1,$2,$3,$1,$1,$4)',[randomUUID(),rid,vid,owner.id]);
+ await deletionRequest(owner,cid);await due(cid);
+ assert.equal(await purgeDueContracts(),1);
+ assert.equal((await query('SELECT id FROM contracts WHERE id=$1',[cid])).rowCount,0);
+ assert.equal((await query('SELECT file_key FROM object_gc WHERE file_key=$1',[vid])).rowCount,1);
+}));
+test('post-request communication extends retention; later expiry purges without manual reapplication',{skip:!enabled},()=>fixture(async({owner,cid,rid})=>{
+ await deletionRequest(owner,cid);await due(cid);
+ await addReviewMessage(owner,cid,rid,{content:'Synthetic follow-up',requestId:randomUUID()});
+ const deadline=(await deletionState(owner,cid))!.delete_after;
+ assert.ok(new Date(deadline).getTime()>Date.now()+29*86400000);
+ assert.equal(await purgeDueContracts(),0);
+ assert.equal(new Date((await deletionRequest(owner,cid)).deleteAfter).getTime(),new Date(deadline).getTime());
+ await query("UPDATE contracts SET updated_at=now()-interval '31 days' WHERE id=$1",[cid]);
+ assert.equal(await purgeDueContracts(),1);
+}));
+test('a failed deletion does not roll back another contract in the batch',{skip:!enabled},()=>fixture(async(a)=>fixture(async(b)=>{
+ await query('CREATE TABLE qa_delete_blocker(contract_id text REFERENCES contracts(id))');
+ try{
+ await query('INSERT INTO qa_delete_blocker VALUES($1)',[a.cid]);
+ for(const f of [a,b]){await deletionRequest(f.owner,f.cid);await due(f.cid)}
+ assert.equal(await purgeDueContracts(),1);
+ assert.equal((await query('SELECT id FROM contracts WHERE id=$1',[a.cid])).rowCount,1);
+ assert.equal((await query('SELECT id FROM contracts WHERE id=$1',[b.cid])).rowCount,0);
+ }finally{await query('DROP TABLE qa_delete_blocker')}
+})));
+test('browser history is bounded, older pages and versions remain authorized, Agent history stays complete',{skip:!enabled},()=>fixture(async({owner,lawyer,cid,rid,vid})=>{
+ for(let n=1;n<=120;n++){
+ await query("INSERT INTO messages(id,contract_id,role,content) VALUES($1,$2,'user',$3)",[randomUUID(),cid,'Message '+n]);
+ await query('INSERT INTO review_messages(id,review_id,author_id,content) VALUES($1,$2,$3,$4)',[randomUUID(),rid,owner.id,'Review '+n]);
+ }
+ const historical=randomUUID(),latest=randomUUID(),content=contentFixture();
+ for(const [id,n] of [[historical,2],[latest,3]] as const)await query("INSERT INTO versions(id,contract_id,number,kind,review_id,file_key,source,content,text_content) VALUES($1,$2,$3,'review',$4,$1,'lawyer',$5::jsonb,'Saved text')",[id,cid,n,rid,JSON.stringify(content)]);
+ const token=await contractChangeToken(owner,cid),view=await getContractForRoute(owner,cid);
+ assert.equal(view.messages.length,50);assert.equal(view.messagesHasMore,true);assert.equal(view.reviews[0].messages.length,50);
+ assert.equal(view.versions.find(v=>v.id===historical)?.bodyLoaded,false);assert.equal(view.versions.find(v=>v.id===historical)?.content,null);
+ assert.equal((await versionDetails(lawyer,cid,historical)).content?.title,content.title);
+ const older=await messagePage(owner,cid,view.messages[0].id);assert.equal(older.items.length,50);assert.equal(older.items.at(-1)?.content,'Message 70');assert.equal(older.hasMore,true);
+ const first=await messagePage(owner,cid,older.items[0].id);assert.equal(first.items.length,20);assert.equal(first.hasMore,false);
+ assert.equal((await messagePage(lawyer,cid,view.reviews[0].messages[0].id,rid)).items.length,50);
+ await assert.rejects(()=>messagePage(lawyer,cid),{code:'FORBIDDEN'});
+ await assert.rejects(()=>versionDetails({...owner,id:randomUUID()},cid,vid),{code:'CONTRACT_NOT_FOUND'});
+ const complete=await workflowStore(owner,cid).load();assert.equal(complete.contract.messages.length,120);assert.ok(complete.contract.versions.find(v=>v.id===historical)?.content);
+ assert.equal(await contractChangeToken(owner,cid),token);
+ await query("UPDATE reviews SET save_status='pending' WHERE id=$1",[rid]);assert.notEqual(await contractChangeToken(owner,cid),token,'callback state changes invalidate cache even without timestamp change');
+}));

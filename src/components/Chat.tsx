@@ -1,4 +1,5 @@
 'use client';
+import {useMessageHistory} from './useContractHistory';
 import {useMemo,useRef,useState} from 'react';
 import {AssistantRuntimeProvider,ThreadPrimitive,MessagePrimitive,useExternalStoreRuntime,useMessage,type ThreadMessageLike} from '@assistant-ui/react';
 import {ArrowUp,ArrowDown,Square,FileText,Download} from 'lucide-react';
@@ -16,7 +17,8 @@ function AssistantMessage(){
 }
 const messageComponents={UserMessage,AssistantMessage};
 const convertMessage=(m:ViewMessage):ThreadMessageLike=>({id:m.id,role:m.role,content:[{type:'text',text:(m.content.startsWith('我确认以下交易信息，请按适用规则起草：\n')?'我已确认交易摘要，请按这些约定起草合同。':m.content).replace(/^【起草模板：[a-z-]+@[\d.]+】\n/,'')}],createdAt:new Date(m.createdAt),metadata:{custom:{progress:m.progress}}});
-export function Chat({contractId,store,job,messages,busy,onSend,onCancel,onRetry,onViewDocument,onReview,version,disabled,input,onInputChange:setInput}:{contractId:string;store:AgentViewStore;job?:GenerationJob;messages:Message[];busy:boolean;onSend:(text:string,generate?:boolean)=>Promise<void>;onCancel:()=>Promise<void>;onRetry:()=>Promise<void>;onViewDocument:()=>void;onReview?:()=>void;version?:Version;disabled?:boolean;input:string;onInputChange:(value:string)=>void}){
+export function Chat({contractId,store,job,messages:recentMessages,messagesHasMore,busy,onSend,onCancel,onRetry,onViewDocument,onReview,version,disabled,input,onInputChange:setInput}:{contractId:string;store:AgentViewStore;job?:GenerationJob;messages:Message[];messagesHasMore?:boolean;busy:boolean;onSend:(text:string,generate?:boolean)=>Promise<void>;onCancel:()=>Promise<void>;onRetry:()=>Promise<void>;onViewDocument:()=>void;onReview?:()=>void;version?:Version;disabled?:boolean;input:string;onInputChange:(value:string)=>void}){
+ const history=useMessageHistory(`contracts/${contractId}/messages`,recentMessages,messagesHasMore),messages=history.messages;
  const view=useAgentView(store,contractId),[sending,setSending]=useState(false),[stopping,setStopping]=useState(false),[optimistic,setOptimistic]=useState<Message|null>(null);
  const sendingRef=useRef(false),inputRef=useRef(input);inputRef.current=input;
  const progress=view?.jobId===job?.id?view:job&&['pending','running'].includes(job.status)?{jobId:job.id,phase:job.phase,status:job.status,label:phaseLabels[job.phase],text:'',activities:[],createdAt:job.createdAt}:undefined;
@@ -36,6 +38,7 @@ export function Chat({contractId,store,job,messages,busy,onSend,onCancel,onRetry
  const runtime=useExternalStoreRuntime<ViewMessage>({messages:projected,isRunning:busy||sending,isDisabled:disabled,convertMessage,onCancel:cancel,onNew:async m=>{if(!busy&&!disabled)await onSend(m.content.filter(c=>c.type==='text').map(c=>'text'in c?c.text:'').join('\n'));}});
  const working=busy||sending;
  return <AssistantRuntimeProvider runtime={runtime}><ThreadPrimitive.Root className="chat-thread streaming-thread"><ThreadPrimitive.Viewport className="chat-messages" scrollToBottomOnRunStart={false}>
+  {history.hasMore&&<button className="text-button" disabled={history.busy} onClick={()=>void history.load()}>{history.busy?'正在加载…':'加载更早的对话'}</button>}{history.error&&<p role="alert">{history.error}</p>}
   <ThreadPrimitive.Messages components={messageComponents}/>
   {job&&job.phase!=='understand'&&['pending','running'].includes(job.status)&&<button className="contract-artifact pending-artifact" onClick={onViewDocument}><FileText size={21}/><span><strong>查看合同初稿</strong><small>{progress?.text?`已生成 ${progress.text.length.toLocaleString()} 字符 · 查看实时预览`:'实时预览 · 尚未保存'}</small></span></button>}
   {job?.status==='cancelled'&&<p className="inline-recovery">本次生成已停止，已有合同和约定已保留。</p>}
